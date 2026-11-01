@@ -1,59 +1,56 @@
 # Breakout Radar
 
-Breakout Radar is a React/Vite frontend with a separately run Python/FastAPI backend. It searches the live MusicBrainz artist catalog and stores artist identities an operator chooses to save.
+Breakout Radar is the place where a scouting team turns measured, sourced signals into human-reviewed signing decisions.
 
-**It starts with no saved artists.** Discovery results come from MusicBrainz and are labeled with their source; the application does not invent artist profiles or audience measurements. Spotify and YouTube are external search destinations, not integrated data providers.
+The product is built around one principle: a signal is only valuable if it is provable, time-stamped, and explainable. This repository keeps the product honest by separating catalog lookups from recommendation claims and by making every evidence source explicit.
 
-The public homepage leads to a local demo sign-in and then the app. The demo sign-in creates only a browser session marker; it is not authentication. The API remains unauthenticated. Do not expose it to the public internet or enter confidential data.
+## North star
 
-## Project layout
+- Every number has a provenance row: source, timestamp, licence, and raw reference
+- Every score remains explainable before it is presented as a recommendation
+- Humans decide; the system prepares evidence and accelerates review
+
+## Current repo layout
 
 ```text
-frontend/   React + Vite UI and frontend tests
-backend/    FastAPI service, Pydantic request/response models, SQLAlchemy persistence, API tests
-docs/       Architecture and live-data integration notes
+backend/    FastAPI app, SQLAlchemy models, provider integrations, API tests
+frontend/   React + Vite client, API layer, UI and component tests
+docs/       Architecture, data-source, and product notes
 ```
 
-## Workspace sections
+This project already includes a working catalog search and directory workflow, and the next step is to evolve it from a metadata browser into an evidence-backed scouting workspace. The rebuild keeps the catalog search, but adds a scoring and review layer that is explicitly sourced and reviewable.
 
-- **Discovery** manages the operator-entered artist directory and shows the actual provider and measurement status.
-- **Live catalog search** calls the Python backend, which searches MusicBrainz by artist/keyword, configured region, or genre. Results can be opened at MusicBrainz and saved to the local directory with provenance.
-- **Analyze** explains which evidence is unavailable; it does not display placeholder charts or inferred metrics.
-- **Recommend** stays empty until authorized evidence and a validated recommendation model exist.
-- **Settings** controls saved discovery region, genre, result count, and optional auto-search when Discovery opens. It also reports backend/database status and provider availability.
+## Product direction
 
-The artist search filters records loaded from the API, and the directory can load additional records when needed. Empty states describe missing data rather than filling the dashboard with sample artists or invented results. Discovery auto-search runs at most once per app entry and respects MusicBrainz's request limits.
+The working wedge is a human-in-the-loop scouting workspace with:
 
-## Run the backend
+- a command-bar search for artist, region, and genre
+- a reviewable artist page with signal timelines and evidence drawers
+- a pipeline board for discovery through review
+- structured scoring rubrics and reviewer notes
+- weekly digest views and alert thresholds
+
+This extends beyond the current placeholder dashboards and keeps the product useful without inventing audience data.
+
+## Quick start
+
+### Backend
 
 Requires Python 3.10+.
 
 ```bash
 cd backend
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 python3 -m pip install -r requirements.txt
-cp .env.example .env               # optional; SQLite defaults to backend/data/breakout_radar.db
+cp .env.example .env
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-If the project folder is moved and a command reports a `bad interpreter` path, recreate the virtual environment from `backend/` because virtual environments contain absolute paths:
+Health check: `http://127.0.0.1:8000/api/health`
+Interactive docs: `http://127.0.0.1:8000/docs`
 
-```bash
-deactivate  # if the old environment is active
-python3 -m venv --clear .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
-```
-
-API health: `http://127.0.0.1:8000/api/health`  
-Interactive API docs: `http://127.0.0.1:8000/docs`
-
-SQLite is created on first startup. For PostgreSQL, set `DATABASE_URL` to a SQLAlchemy URL such as `postgresql://user:password@localhost:5432/breakout_radar`; the PostgreSQL driver is included.
-
-Before deployment, set `MUSICBRAINZ_CONTACT` to a real maintainer email or contact URL. MusicBrainz requires a meaningful User-Agent and limits clients to one request per second. Local development defaults to the frontend's localhost URL.
-
-## Run the frontend separately
+### Frontend
 
 Requires Node 20.19+.
 
@@ -63,36 +60,32 @@ npm ci
 npm run dev
 ```
 
-Vite runs at `http://127.0.0.1:5173` and proxies `/api` requests to the Python service on port 8000. Set `API_PROXY_TARGET` to use a different backend URL. Build and test the client from `frontend/`:
+The Vite app runs at `http://127.0.0.1:5173` and proxies `/api` to the backend on port 8000.
+
+### Repo tasks
 
 ```bash
-npm test
-npm run build
+make dev
+make test
+make lint
+make migrate
 ```
 
-Run backend tests separately from `backend/`:
+## Security and ops notes
 
-```bash
-python -m pytest
-```
+- Authentication is not enabled in the current local demo flow; the API must remain local-only during development.
+- Keep provider and sign-in access behind real authorization before exposing the service publicly.
+- PostgreSQL is supported via `DATABASE_URL`; SQLite remains the default for local development.
+- Production deployments need real auth, migrations, retention rules, and monitoring.
 
-## API capabilities
+## Contributing
 
-- `GET /api/health` reports database connectivity, demo authentication status, and the configured MusicBrainz catalog.
-- `GET /api/providers` lists MusicBrainz availability and clearly marks Spotify/YouTube as not integrated.
-- `GET /api/discovery/search?query=...&area=...&genre=...&limit=10` retrieves current artist metadata from MusicBrainz. At least one filter is required.
-- `GET /api/artists?limit=50&offset=0` lists persisted identities.
-- `POST /api/artists` adds an operator-submitted or explicitly saved provider identity and source URL.
-- `GET`, `PATCH`, and `DELETE /api/artists/{id}` manage a single identity record.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for contribution workflow and standards.
 
-The API rejects unknown fields such as audience counts or scores. A MusicBrainz search never saves a record automatically; the operator must choose **Add to directory**. Results are catalog matches, not a discovery ranking or claim of artist potential.
+## Security
 
-## Current limitations
+See [SECURITY.md](./SECURITY.md) for reporting vulnerabilities and the supported disclosure process.
 
-- Authentication is disabled and clearly marked. API access is not protected; keep the service bound to localhost.
-- MusicBrainz provides identity/catalog metadata only; this search does not provide audience growth or popularity evidence.
-- Spotify and YouTube adapters are not implemented. Spotify requires an approved application and credentials; YouTube Data API requires an API key and quota. Review provider terms before adding either integration.
-- The sign-in flow is a UI-only demo, not authentication. API access is unprotected.
-- Database tables are created automatically for local development; production deployment needs migrations, real authentication/authorization, backups, and operational monitoring.
-# ARTIST_BREAK_APP
-# ARTIST_BREAK_APP
+## License
+
+This project is licensed under the [MIT License](./LICENSE).
