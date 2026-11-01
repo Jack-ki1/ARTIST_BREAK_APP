@@ -1,0 +1,26 @@
+{
+  "name": "breakout-radar-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^8.3.5"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.3",
+    "vitest": "^5.0.5"
+  }
+}
