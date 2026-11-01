@@ -95,3 +95,4 @@ The API rejects unknown fields such as audience counts or scores. A MusicBrainz 
 - The sign-in flow is a UI-only demo, not authentication. API access is unprotected.
 - Database tables are created automatically for local development; production deployment needs migrations, real authentication/authorization, backups, and operational monitoring.
 # ARTIST_BREAK_APP
+# ARTIST_BREAK_APP
