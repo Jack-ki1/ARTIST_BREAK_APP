@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -8,17 +9,30 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.database import create_database_tables, engine, get_db
-from app.models import Artist
-from app.providers import provider_status, search_musicbrainz
+from app.database import SessionLocal, create_database_tables, engine, get_db
+from app.models import Artist, DiscoveryCandidate, DiscoveryConfiguration, ProviderConfiguration
+from app.providers import (
+    PROVIDER_CATALOG,
+    provider_status,
+    search_enabled_providers,
+    search_provider,
+)
+from app.scheduler import DISCOVERY_INTERVAL_SECONDS, run_discovery_scheduler
+from app.secrets import decrypt_credentials, encrypt_credentials
 from app.schemas import (
     ArtistCreate,
     ArtistPage,
     ArtistRead,
     ArtistUpdate,
     DiscoveryPage,
+    DiscoveryQueueItemRead,
+    DiscoveryQueuePage,
+    DiscoveryQueueReview,
+    DiscoverySettingsRead,
+    DiscoverySettingsWrite,
     HealthRead,
     ProviderRead,
+    ProviderSettingsWrite,
 )
 
 
@@ -26,21 +40,56 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 
+def _report_scheduler_failure(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is not None:
+        logger.error(
+            "Background discovery scheduler stopped unexpectedly",
+            exc_info=(type(exception), exception, exception.__traceback__),
+        )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     create_database_tables()
+    wakeup = asyncio.Event()
+    app.state.discovery_wakeup = wakeup
+    scheduler_task = asyncio.create_task(
+        run_discovery_scheduler(SessionLocal, search_provider, wakeup),
+        name="provider-discovery-scheduler",
+    )
+    scheduler_task.add_done_callback(_report_scheduler_failure)
     yield
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(
     title="Breakout Radar API",
     description=(
-        "Artist identity records and live MusicBrainz catalog search. No audience "
-        "measurements, rankings, or authentication are configured."
+        "Artist identity records, scheduled multi-provider discovery, and a human-reviewed "
+        "candidate queue. No audience measurements or rankings are configured."
     ),
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+def _settings_response(configuration: DiscoveryConfiguration | None) -> DiscoverySettingsRead:
+    return DiscoverySettingsRead(
+        areas=configuration.areas if configuration else [],
+        genres=configuration.genres if configuration else [],
+        result_limit=configuration.result_limit if configuration else 10,
+        enabled=configuration.enabled if configuration else True,
+        updated_at=configuration.updated_at if configuration else None,
+        interval_seconds=DISCOVERY_INTERVAL_SECONDS,
+    )
+
 
 allowed_origins = [
     origin.strip()
@@ -54,13 +103,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
 
 @app.get("/api/health", response_model=HealthRead)
-def health() -> HealthRead:
+def health(db: Session = Depends(get_db)) -> HealthRead:
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
@@ -71,17 +120,164 @@ def health() -> HealthRead:
             detail="Database is unavailable",
         ) from exc
 
+    provider_configuration = db.get(ProviderConfiguration, 1)
+    enabled_provider_ids = (
+        provider_configuration.enabled_provider_ids
+        if provider_configuration else ["musicbrainz"]
+    )
+    try:
+        credentials = decrypt_credentials(
+            provider_configuration.encrypted_credentials
+            if provider_configuration else None
+        )
+    except RuntimeError as exc:
+        logger.exception("Could not read configured provider credentials")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    available_provider_ids = [
+        provider["id"]
+        for provider in provider_status(enabled_provider_ids, credentials)
+        if provider["enabled"] and provider["configured"]
+    ]
     return HealthRead(
         status="ok",
         database="connected",
-        authentication="disabled-demo-mode",
-        configured_data_providers=["musicbrainz"],
+        authentication="disabled",
+        configured_data_providers=available_provider_ids,
     )
 
 
 @app.get("/api/providers", response_model=list[ProviderRead])
-def list_providers() -> list[ProviderRead]:
-    return [ProviderRead(**provider) for provider in provider_status()]
+def list_providers(db: Session = Depends(get_db)) -> list[ProviderRead]:
+    configuration = db.get(ProviderConfiguration, 1)
+    enabled_provider_ids = (
+        configuration.enabled_provider_ids if configuration else ["musicbrainz"]
+    )
+    try:
+        credentials = decrypt_credentials(
+            configuration.encrypted_credentials if configuration else None
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return [
+        ProviderRead(**provider)
+        for provider in provider_status(enabled_provider_ids, credentials)
+    ]
+
+
+@app.put("/api/providers")
+def update_providers(
+    payload: ProviderSettingsWrite,
+    db: Session = Depends(get_db),
+) -> list[ProviderRead]:
+    specs = {provider["id"]: provider for provider in PROVIDER_CATALOG}
+    enabled_ids = list(dict.fromkeys(payload.enabled_provider_ids))
+    unknown_ids = sorted(set(enabled_ids) - specs.keys())
+    if unknown_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown provider IDs: {', '.join(unknown_ids)}",
+        )
+
+    configuration = db.get(ProviderConfiguration, 1)
+    credentials: dict[str, str] = {}
+    if configuration is not None and configuration.encrypted_credentials:
+        try:
+            credentials = decrypt_credentials(configuration.encrypted_credentials)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+
+    for provider_id, values in payload.credential_updates.items():
+        if provider_id not in specs:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unknown provider ID: {provider_id}",
+            )
+        allowed_fields = {field["key"] for field in specs[provider_id]["fields"]}
+        unknown_fields = sorted(set(values) - allowed_fields)
+        if unknown_fields:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unknown credential fields for {provider_id}: {', '.join(unknown_fields)}",
+            )
+        for key, value in values.items():
+            credential_key = f"{provider_id}.{key}"
+            if value.strip():
+                credentials[credential_key] = value.strip()
+
+    for credential_key in payload.clear_credentials:
+        if "." not in credential_key:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Credential keys must use provider_id.field_name",
+            )
+        provider_id, field_name = credential_key.split(".", 1)
+        if (
+            provider_id not in specs
+            or field_name not in {field["key"] for field in specs[provider_id]["fields"]}
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unknown credential field: {credential_key}",
+            )
+        credentials.pop(credential_key, None)
+
+    if configuration is None:
+        configuration = ProviderConfiguration(id=1)
+        db.add(configuration)
+    configuration.enabled_provider_ids = enabled_ids
+    if credentials:
+        try:
+            configuration.encrypted_credentials = encrypt_credentials(credentials)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+    else:
+        configuration.encrypted_credentials = None
+    db.commit()
+    db.refresh(configuration)
+    return [
+        ProviderRead(**provider)
+        for provider in provider_status(enabled_ids, credentials)
+    ]
+
+
+@app.get("/api/discovery/settings", response_model=DiscoverySettingsRead)
+def get_discovery_settings(db: Session = Depends(get_db)) -> DiscoverySettingsRead:
+    return _settings_response(db.get(DiscoveryConfiguration, 1))
+
+
+@app.put("/api/discovery/settings", response_model=DiscoverySettingsRead)
+def update_discovery_settings(
+    payload: DiscoverySettingsWrite,
+    db: Session = Depends(get_db),
+) -> DiscoverySettingsRead:
+    configuration = db.get(DiscoveryConfiguration, 1)
+    if configuration is None:
+        configuration = DiscoveryConfiguration(id=1)
+        db.add(configuration)
+
+    configuration.areas = payload.areas
+    configuration.genres = payload.genres
+    configuration.result_limit = payload.result_limit
+    configuration.enabled = payload.enabled
+    db.commit()
+    db.refresh(configuration)
+
+    wakeup = getattr(app.state, "discovery_wakeup", None)
+    if wakeup is not None:
+        wakeup.set()
+    return _settings_response(configuration)
 
 
 @app.get("/api/discovery/search", response_model=DiscoveryPage)
@@ -91,6 +287,7 @@ async def discover_artists(
     genre: str | None = Query(default=None, min_length=1, max_length=120),
     limit: int = Query(default=10, ge=1, le=25),
     offset: int = Query(default=0, ge=0, le=1000),
+    db: Session = Depends(get_db),
 ) -> DiscoveryPage:
     filters = {
         "query": query.strip() if query else None,
@@ -102,17 +299,88 @@ async def discover_artists(
     if not any((filters["query"], filters["area"], filters["genre"])):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Enter an artist, region, or genre to search MusicBrainz",
+            detail="Enter an artist, region, or genre to search the enabled providers",
         )
     try:
-        result = await search_musicbrainz(**filters)
+        configuration = db.get(ProviderConfiguration, 1)
+        enabled_provider_ids = (
+            configuration.enabled_provider_ids if configuration else ["musicbrainz"]
+        )
+        credentials = decrypt_credentials(
+            configuration.encrypted_credentials if configuration else None
+        )
+        result = await search_enabled_providers(
+            enabled_provider_ids,
+            credentials,
+            **filters,
+        )
     except RuntimeError as exc:
-        logger.warning("Artist discovery provider unavailable: %s", exc)
+        logger.exception("Could not run configured discovery providers")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
     return DiscoveryPage(**result)
+
+
+@app.get("/api/discovery/queue", response_model=DiscoveryQueuePage)
+def get_discovery_queue(
+    status_filter: str = Query(default="pending", alias="status", pattern="^(pending|accepted|dismissed|all)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> DiscoveryQueuePage:
+    query = select(DiscoveryCandidate)
+    count_query = select(func.count()).select_from(DiscoveryCandidate)
+    if status_filter != "all":
+        query = query.where(DiscoveryCandidate.status == status_filter)
+        count_query = count_query.where(DiscoveryCandidate.status == status_filter)
+    total = db.scalar(count_query) or 0
+    items = db.scalars(
+        query.order_by(DiscoveryCandidate.last_seen_at.desc(), DiscoveryCandidate.name)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return DiscoveryQueuePage(items=items, total=total, limit=limit, offset=offset)
+
+
+@app.patch("/api/discovery/queue/{candidate_id}", response_model=DiscoveryQueueItemRead)
+def review_discovery_candidate(
+    candidate_id: str,
+    payload: DiscoveryQueueReview,
+    db: Session = Depends(get_db),
+) -> DiscoveryCandidate:
+    candidate = db.get(DiscoveryCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discovery candidate not found")
+    if candidate.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Discovery candidate has already been reviewed",
+        )
+
+    if payload.status == "accepted":
+        artist = db.scalar(
+            select(Artist).where(
+                Artist.source_name == candidate.provider_id,
+                Artist.source_url == candidate.source_url,
+            )
+        )
+        if artist is None:
+            db.add(
+                Artist(
+                    name=candidate.name,
+                    country=candidate.country,
+                    city=candidate.area,
+                    genre=", ".join(candidate.tags[:3]) or None,
+                    source_name=candidate.provider_id,
+                    source_url=candidate.source_url,
+                )
+            )
+    candidate.status = payload.status
+    db.commit()
+    db.refresh(candidate)
+    return candidate
 
 
 @app.get("/api/artists", response_model=ArtistPage)

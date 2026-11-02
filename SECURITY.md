@@ -13,5 +13,5 @@ This project is under active development. Security fixes are prioritized for the
 ## Operational guidance
 
 - Keep the API bound to localhost or a trusted network during development.
-- Do not expose demo sign-in or unauthenticated APIs to public traffic.
+- The API does not authenticate callers; do not expose it to public traffic.
 - Rotate credentials for any external provider integrations before production use.

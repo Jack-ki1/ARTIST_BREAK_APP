@@ -2,16 +2,33 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createArtist,
   deleteArtist,
+  getDiscoveryQueue,
+  getDiscoverySettings,
   getArtists,
   getHealth,
   getProviders,
+  reviewDiscoveryCandidate,
+  saveProviderSettings,
+  saveDiscoverySettings,
   searchArtists,
 } from "./api.js";
 
 const PAGE_SIZE = 50;
 const PREFERENCE_KEY = "breakout-radar-discovery-preferences";
-const DEMO_SESSION_KEY = "breakout-radar-demo-session";
-const DEFAULT_PREFERENCES = { area: "", genre: "", limit: 10, autoSearch: false };
+const DEFAULT_PREFERENCES = { area: "", genre: "", limit: 10, enabled: true };
+
+function preferencesFromSettings(settings) {
+  return {
+    area: settings.areas.join(", "),
+    genre: settings.genres.join(", "),
+    limit: settings.result_limit,
+    enabled: settings.enabled,
+  };
+}
+
+function filterValues(value) {
+  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
+}
 
 const NAV_ITEMS = [
   { id: "discovery", label: "Discovery", icon: "compass" },
@@ -208,97 +225,14 @@ function formatDate(value) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
 }
 
-function PublicHome({ onStart }) {
-  return (
-    <div className="public-page">
-      <header className="public-nav">
-        <a aria-label="Breakout Radar home" className="brand" href="/">
-          <span aria-hidden="true" className="brand-mark"><Icon name="music" size={20} /></span>
-          <span className="brand-copy">BREAKOUT <b>RADAR</b><small>ARTIST INTELLIGENCE</small></span>
-        </a>
-        <button className="button button-secondary" onClick={onStart} type="button">Sign in <Icon name="arrow" size={14} /></button>
-      </header>
-      <main className="public-main">
-        <section className="public-hero">
-          <div className="public-copy">
-            <p className="public-kicker"><span /> INDEPENDENT ARTIST DISCOVERY</p>
-            <h1>Find the next<br /><em>breakthrough.</em></h1>
-            <p>Search a global artist catalog, build a sourced shortlist, and keep every decision grounded in evidence—not invented scores.</p>
-            <div className="public-actions">
-              <button className="button button-primary public-cta" onClick={onStart} type="button">Enter demo workspace <Icon name="arrow" size={16} /></button>
-              <span>Free demo · no password required</span>
-            </div>
-            <div className="public-proof">
-              <span><Icon name="database" size={16} /> MusicBrainz catalog</span>
-              <span><Icon name="shield" size={16} /> Source attributed</span>
-              <span><Icon name="spark" size={16} /> No fabricated metrics</span>
-            </div>
-          </div>
-          <div aria-hidden="true" className="public-art">
-            <div className="public-orbit orbit-outer" />
-            <div className="public-orbit orbit-inner" />
-            <div className="public-vinyl"><span><Icon name="music" size={33} /></span></div>
-            <div className="public-art-note note-one">DISCOVER</div>
-            <div className="public-art-note note-two">WITH EVIDENCE</div>
-            <div className="public-star star-one">✦</div>
-            <div className="public-star star-two">✳</div>
-          </div>
-        </section>
-        <section className="public-capabilities" aria-label="Product capabilities">
-          {[
-            { icon: "compass", number: "01", title: "Discovery", copy: "Search the MusicBrainz catalog by artist, country, or genre." },
-            { icon: "chart", number: "02", title: "Analyze", copy: "See what source data exists—and what still needs verification." },
-            { icon: "spark", number: "03", title: "Recommend", copy: "Keep recommendations off until real evidence supports them." },
-          ].map((item) => (
-            <article className="public-capability glass" key={item.title}>
-              <div className="capability-top"><span className="capability-icon"><Icon name={item.icon} size={19} /></span><span>{item.number}</span></div>
-              <h2>{item.title}</h2><p>{item.copy}</p>
-            </article>
-          ))}
-        </section>
-        <footer className="public-footer">
-          <span className="footer-brand"><Icon name="music" size={16} /> BREAKOUT RADAR</span>
-          <span>Artist metadata is not a measure of artist potential.</span>
-        </footer>
-      </main>
-    </div>
-  );
-}
-
-function DemoSignIn({ onContinue, onBack }) {
-  return (
-    <main className="signin-page">
-      <button aria-label="Back to home" className="signin-back" onClick={onBack} type="button"><Icon name="arrow" size={17} /> Back</button>
-      <section className="signin-card glass">
-        <a aria-label="Breakout Radar home" className="brand signin-brand" href="/">
-          <span aria-hidden="true" className="brand-mark"><Icon name="music" size={20} /></span>
-          <span className="brand-copy">BREAKOUT <b>RADAR</b><small>ARTIST INTELLIGENCE</small></span>
-        </a>
-        <div className="signin-icon"><Icon name="shield" size={22} /></div>
-        <p className="public-kicker">DEMO ACCESS</p>
-        <h1>Welcome back.</h1>
-        <p className="signin-description">Sign-in is a local demo flow only. No account or password is sent or verified.</p>
-        <div className="demo-notice"><Icon name="shield" size={17} /><span><b>Demo mode</b><br />Do not enter passwords or confidential data.</span></div>
-        <button className="button button-primary signin-submit" onClick={onContinue} type="button">Continue to demo workspace <Icon name="arrow" size={16} /></button>
-        <button className="signin-home-link" onClick={onBack} type="button">Return to the public homepage</button>
-      </section>
-      <p className="signin-footnote">Authentication is not enabled. This demo does not protect API access.</p>
-    </main>
-  );
-}
-
 export default function App() {
   const [section, setSection] = useState("discovery");
-  const [route, setRoute] = useState(() => {
-    const path = window.location.pathname;
-    if (path === "/app" && window.sessionStorage.getItem(DEMO_SESSION_KEY) !== "active") {
-      window.history.replaceState({}, "", "/login");
-      return "/login";
-    }
-    return ["/", "/login", "/app"].includes(path) ? path : "/";
-  });
   const [health, setHealth] = useState(null);
   const [providers, setProviders] = useState([]);
+  const [selectedProviderIds, setSelectedProviderIds] = useState(["musicbrainz"]);
+  const [providerCredentialDraft, setProviderCredentialDraft] = useState({});
+  const [credentialsToClear, setCredentialsToClear] = useState([]);
+  const [providerSettingsMessage, setProviderSettingsMessage] = useState("");
   const [page, setPage] = useState({ items: [], total: 0, offset: 0 });
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -307,36 +241,16 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
   const searchInputRef = useRef(null);
-  const autoSearchKeyRef = useRef("");
   const [discoveryQuery, setDiscoveryQuery] = useState("");
   const [discoveryResults, setDiscoveryResults] = useState([]);
   const [discoveryCount, setDiscoveryCount] = useState(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState("");
+  const [discoveryQueue, setDiscoveryQueue] = useState({ items: [], total: 0, limit: 50, offset: 0 });
   const [savedCandidates, setSavedCandidates] = useState({});
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [preferenceDraft, setPreferenceDraft] = useState(DEFAULT_PREFERENCES);
   const [preferencesMessage, setPreferencesMessage] = useState("");
-
-  const navigate = useCallback((path) => {
-    if (path === "/app") window.sessionStorage.setItem(DEMO_SESSION_KEY, "active");
-    window.history.pushState({}, "", path);
-    setRoute(path);
-  }, []);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      const path = window.location.pathname;
-      if (path === "/app" && window.sessionStorage.getItem(DEMO_SESSION_KEY) !== "active") {
-        window.history.replaceState({}, "", "/login");
-        setRoute("/login");
-        return;
-      }
-      setRoute(["/", "/login", "/app"].includes(path) ? path : "/");
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
 
   useEffect(() => {
     try {
@@ -347,7 +261,7 @@ export default function App() {
           area: typeof parsed.area === "string" ? parsed.area : "",
           genre: typeof parsed.genre === "string" ? parsed.genre : "",
           limit: [5, 10, 25].includes(parsed.limit) ? parsed.limit : 10,
-          autoSearch: parsed.autoSearch === true,
+          enabled: parsed.enabled !== false,
         };
         setPreferences(next);
         setPreferenceDraft(next);
@@ -361,14 +275,42 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [service, artists, connectedProviders] = await Promise.all([
+      const [service, artists, connectedProviders, candidateQueue, storedSettings] = await Promise.all([
         getHealth(),
         getArtists({ limit: PAGE_SIZE, offset: 0 }),
         getProviders(),
+        getDiscoveryQueue(),
+        getDiscoverySettings(),
       ]);
+      let discoverySettings = storedSettings;
+      if (!storedSettings.updated_at) {
+        let legacyPreferences;
+        try {
+          const saved = window.localStorage.getItem(PREFERENCE_KEY);
+          legacyPreferences = saved ? JSON.parse(saved) : null;
+        } catch {
+          setPreferencesMessage("Could not read the previous browser preferences; configure discovery settings again.");
+        }
+        if (legacyPreferences) {
+          discoverySettings = await saveDiscoverySettings({
+            areas: filterValues(typeof legacyPreferences.area === "string" ? legacyPreferences.area : ""),
+            genres: filterValues(typeof legacyPreferences.genre === "string" ? legacyPreferences.genre : ""),
+            result_limit: [5, 10, 25].includes(legacyPreferences.limit) ? legacyPreferences.limit : 10,
+            enabled: legacyPreferences.enabled !== false,
+          });
+        }
+      }
       setHealth(service);
       setPage(artists);
       setProviders(connectedProviders);
+      setSelectedProviderIds(
+        connectedProviders.filter((provider) => provider.enabled).map((provider) => provider.id),
+      );
+      setDiscoveryQueue(candidateQueue);
+      const nextPreferences = preferencesFromSettings(discoverySettings);
+      setPreferences(nextPreferences);
+      setPreferenceDraft(nextPreferences);
+      window.localStorage.setItem(PREFERENCE_KEY, JSON.stringify(nextPreferences));
     } catch (requestError) {
       setHealth(null);
       setError(requestError.message);
@@ -378,17 +320,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (route === "/app") reload();
-  }, [reload, refreshKey, route]);
+    reload();
+  }, [reload, refreshKey]);
 
   const runDiscovery = useCallback(async (event) => {
     event?.preventDefault();
-    const filters = {
-      query: discoveryQuery.trim(),
-      area: preferences.area.trim(),
-      genre: preferences.genre.trim(),
-    };
-    if (!filters.query && !filters.area && !filters.genre) {
+    const areas = filterValues(preferences.area);
+    const genres = filterValues(preferences.genre);
+    const queryText = discoveryQuery.trim();
+    if (!queryText && !areas.length && !genres.length) {
       setDiscoveryError("Enter an artist, or set a region or genre in Settings before searching.");
       return;
     }
@@ -397,13 +337,26 @@ export default function App() {
     setDiscoveryResults([]);
     setDiscoveryCount(null);
     try {
-      const result = await searchArtists({
-        ...filters,
-        limit: preferences.limit,
-        offset: 0,
-      });
-      setDiscoveryResults(result.items);
-      setDiscoveryCount(result.count);
+      const matches = new Map();
+      const resultErrors = [];
+      const searchAreas = areas.length ? areas : [""];
+      const searchGenres = genres.length ? genres : [""];
+      for (const area of searchAreas) {
+        for (const genre of searchGenres) {
+          const result = await searchArtists({
+            query: queryText,
+            area,
+            genre,
+            limit: preferences.limit,
+            offset: 0,
+          });
+          for (const candidate of result.items) matches.set(candidate.id, candidate);
+          resultErrors.push(...(result.errors || []));
+        }
+      }
+      setDiscoveryResults([...matches.values()]);
+      setDiscoveryCount(matches.size);
+      setDiscoveryError(resultErrors.join(" · "));
     } catch (requestError) {
       setDiscoveryError(requestError.message);
     } finally {
@@ -412,15 +365,17 @@ export default function App() {
   }, [discoveryQuery, preferences]);
 
   useEffect(() => {
-    if (route !== "/app" || section !== "discovery" || !preferences.autoSearch ||
-        (!preferences.area.trim() && !preferences.genre.trim())) return;
-    const key = `${preferences.area}|${preferences.genre}|${preferences.limit}`;
-    if (autoSearchKeyRef.current === key) return;
-    autoSearchKeyRef.current = key;
-    runDiscovery();
-  }, [route, section, preferences, runDiscovery]);
+    const timer = window.setInterval(async () => {
+      try {
+        setDiscoveryQueue(await getDiscoveryQueue());
+      } catch (requestError) {
+        setDiscoveryError(requestError.message);
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  const savePreferences = (event) => {
+  const savePreferences = async (event) => {
     event.preventDefault();
     const next = {
       ...preferenceDraft,
@@ -428,14 +383,65 @@ export default function App() {
       genre: preferenceDraft.genre.trim(),
       limit: Number(preferenceDraft.limit),
     };
+    setPreferencesMessage("Saving discovery settings…");
     try {
-      window.localStorage.setItem(PREFERENCE_KEY, JSON.stringify(next));
-      setPreferences(next);
-      setPreferenceDraft(next);
-      setPreferencesMessage("Discovery preferences saved on this device.");
-      autoSearchKeyRef.current = "";
-    } catch {
-      setPreferencesMessage("Could not save preferences in this browser. Check storage permissions and try again.");
+      const settings = await saveDiscoverySettings({
+        areas: filterValues(next.area),
+        genres: filterValues(next.genre),
+        result_limit: next.limit,
+        enabled: next.enabled,
+      });
+      const saved = preferencesFromSettings(settings);
+      setPreferences(saved);
+      setPreferenceDraft(saved);
+      try {
+        window.localStorage.setItem(PREFERENCE_KEY, JSON.stringify(saved));
+      } catch {
+        setPreferencesMessage("Settings saved on the backend, but this browser could not cache a local copy.");
+        return;
+      }
+      setPreferencesMessage("Settings saved. Scheduled searches run every 15 minutes when at least one region or genre is configured.");
+    } catch (requestError) {
+      setPreferencesMessage(`Could not save discovery settings: ${requestError.message}`);
+    }
+  };
+
+  const reviewCandidate = async (candidate, status) => {
+    try {
+      await reviewDiscoveryCandidate(candidate.id, status);
+      setDiscoveryQueue(await getDiscoveryQueue());
+      if (status === "accepted") setRefreshKey((key) => key + 1);
+    } catch (requestError) {
+      setDiscoveryError(requestError.message);
+    }
+  };
+
+  const saveProviders = async (event) => {
+    event.preventDefault();
+    const credentialUpdates = Object.fromEntries(
+      Object.entries(providerCredentialDraft)
+        .map(([providerId, fields]) => [
+          providerId,
+          Object.fromEntries(Object.entries(fields).filter(([, value]) => value.trim())),
+        ])
+        .filter(([, fields]) => Object.keys(fields).length > 0),
+    );
+    setProviderSettingsMessage("Saving provider selections…");
+    try {
+      const updatedProviders = await saveProviderSettings({
+        enabled_provider_ids: selectedProviderIds,
+        credential_updates: credentialUpdates,
+        clear_credentials: credentialsToClear,
+      });
+      setProviders(updatedProviders);
+      setSelectedProviderIds(
+        updatedProviders.filter((provider) => provider.enabled).map((provider) => provider.id),
+      );
+      setProviderCredentialDraft({});
+      setCredentialsToClear([]);
+      setProviderSettingsMessage("Provider selections saved. Credentials are stored encrypted by the backend.");
+    } catch (requestError) {
+      setProviderSettingsMessage(`Could not save provider settings: ${requestError.message}`);
     }
   };
 
@@ -447,7 +453,7 @@ export default function App() {
         country: candidate.country,
         city: candidate.area,
         genre: candidate.tags.slice(0, 3).join(", ") || null,
-        source_name: "MusicBrainz",
+        source_name: candidate.provider_id,
         source_url: candidate.source_url,
       });
       setSavedCandidates((current) => ({ ...current, [candidate.id]: true }));
@@ -513,18 +519,6 @@ export default function App() {
   const providerCount = health?.configured_data_providers?.length;
   const backendConnected = health?.status === "ok";
 
-  if (route === "/") {
-    return <PublicHome onStart={() => navigate("/login")} />;
-  }
-  if (route === "/login") {
-    return (
-      <DemoSignIn
-        onBack={() => navigate("/")}
-        onContinue={() => navigate("/app")}
-      />
-    );
-  }
-
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -543,10 +537,6 @@ export default function App() {
               onClick={() => {
                 setSection(item.id);
                 setShowForm(false);
-                if (item.id === "discovery" && preferences.autoSearch) {
-                  autoSearchKeyRef.current = "";
-                  runDiscovery();
-                }
               }}
               type="button"
             >
@@ -558,7 +548,7 @@ export default function App() {
         </nav>
         <div className="sidebar-bottom">
           <span className="operator-avatar">A</span>
-          <span className="operator-copy"><b>Workspace operator</b><small>Demo · local access</small></span>
+          <span className="operator-copy"><b>Workspace operator</b><small>Local workspace</small></span>
           <span aria-label={backendConnected ? "API connected" : "API disconnected"} className={`connection-dot${backendConnected ? " is-online" : ""}`} />
         </div>
       </aside>
@@ -574,17 +564,7 @@ export default function App() {
             <span className={`api-status${backendConnected ? " connected" : ""}`}>
               <i />{backendConnected ? "API connected" : "API unavailable"}
             </span>
-            <span className="mode-label">DEMO MODE</span>
             <span aria-hidden="true" className="operator-avatar operator-avatar-small">A</span>
-            <button
-              aria-label="Sign out of demo"
-              className="signout-button"
-              onClick={() => {
-                window.sessionStorage.removeItem(DEMO_SESSION_KEY);
-                navigate("/login");
-              }}
-              type="button"
-            >Sign out</button>
           </div>
         </header>
 
@@ -627,16 +607,16 @@ export default function App() {
                 <article className="metric-card panel"><span className="metric-icon icon-green"><Icon name="people" /></span><span className="metric-label">Artist records</span><strong>{loading || error ? "—" : page.total}</strong><small>Operator-entered identities</small></article>
                 <article className="metric-card panel"><span className="metric-icon icon-blue"><Icon name="database" /></span><span className="metric-label">Live providers</span><strong>{providerCount ?? "—"}</strong><small>{providerCount === undefined ? "Provider status unavailable" : providerCount ? "Configured integrations" : "None configured"}</small></article>
                 <article className="metric-card panel"><span className="metric-icon icon-violet"><Icon name="chart" /></span><span className="metric-label">Measurements</span><strong>None</strong><small>No audience history available</small></article>
-                <article className="metric-card metric-status panel"><span className="metric-label">Data status</span><strong><i className={`connection-dot${backendConnected ? " is-online" : ""}`} />{backendConnected ? "Database connected" : "API unavailable"}</strong><small>Authentication disabled · demo only</small></article>
+                <article className="metric-card metric-status panel"><span className="metric-label">Data status</span><strong><i className={`connection-dot${backendConnected ? " is-online" : ""}`} />{backendConnected ? "Database connected" : "API unavailable"}</strong><small>Authentication is not configured</small></article>
                 <article className="metric-card panel"><span className="metric-icon icon-coral"><Icon name="chart" /></span><span className="metric-label">Artist rankings</span><strong>Off</strong><small>No validated scoring model</small></article>
                 <article className="metric-card panel"><span className="metric-icon icon-lime"><Icon name="spark" /></span><span className="metric-label">Recommendations</span><strong>Off</strong><small>Evidence required first</small></article>
               </section>
 
-              <section className="live-discovery panel" aria-label="Live MusicBrainz artist discovery">
+              <section className="live-discovery panel" aria-label="Live artist discovery">
                 <SectionHeading
                   action={<button className="text-action" onClick={() => setSection("settings")} type="button">Search preferences <Icon name="arrow" size={13} /></button>}
-                  description="Search a live artist catalog. Results are source metadata, not breakout rankings."
-                  kicker="LIVE CATALOG SEARCH · MUSICBRAINZ"
+                  description="Search every enabled and configured artist source. Results are source metadata, not breakout rankings."
+                  kicker="LIVE CATALOG SEARCH"
                   title="Discover artists"
                 />
                 <form className="live-search-form" onSubmit={runDiscovery}>
@@ -659,15 +639,15 @@ export default function App() {
                   <span><Icon name="music" size={14} /> Genre: {preferences.genre || "Any genre"}</span>
                   <span>Up to {preferences.limit} results</span>
                 </div>
-                <p className="source-disclaimer">MusicBrainz is a community-maintained artist catalog. Catalog presence does not indicate popularity, growth, or emerging status.</p>
+                <p className="source-disclaimer">Catalog matches are identity metadata. They do not indicate popularity, growth, or emerging status.</p>
                 {discoveryError && <p className="discovery-error" role="alert">{discoveryError}</p>}
-                {discoveryLoading && <p className="loading-state" role="status">Searching MusicBrainz…</p>}
-                {!discoveryLoading && discoveryCount !== null && discoveryResults.length === 0 && (
+                {discoveryLoading && <p className="loading-state" role="status">Searching enabled providers…</p>}
+                {!discoveryLoading && discoveryCount !== null && discoveryResults.length === 0 && !discoveryError && (
                   <EmptyState description="Try a different artist, region, or genre." icon="search" title="No catalog matches" />
                 )}
                 {!discoveryLoading && discoveryResults.length > 0 && (
                   <>
-                    <p className="discovery-result-count">Showing {discoveryResults.length} of {discoveryCount} matching MusicBrainz records.</p>
+                    <p className="discovery-result-count">Found {discoveryCount} unique matches across enabled providers.</p>
                     <div className="candidate-list">
                       {discoveryResults.map((candidate) => {
                         const isSaved = savedCandidates[candidate.id] ||
@@ -681,7 +661,7 @@ export default function App() {
                               {candidate.tags.length > 0 && <div className="candidate-tags">{candidate.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
                             </div>
                             <div className="candidate-actions">
-                              <a href={candidate.source_url} rel="noreferrer" target="_blank">MusicBrainz</a>
+                              <a href={candidate.source_url} rel="noreferrer" target="_blank">{candidate.provider_id}</a>
                               <a href={`https://open.spotify.com/search/${encodeURIComponent(candidate.name)}`} rel="noreferrer" target="_blank">Spotify search</a>
                               <a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(candidate.name)}`} rel="noreferrer" target="_blank">YouTube search</a>
                               <button
@@ -696,6 +676,43 @@ export default function App() {
                       })}
                     </div>
                   </>
+                )}
+              </section>
+
+              <section className="review-queue panel" aria-label="Autonomous discovery review queue">
+                <SectionHeading
+                  description={preferences.enabled
+                    ? "The backend checks every 15 minutes, including when this browser is closed. New catalog matches wait here for your review."
+                    : "Automatic discovery is paused. Enable it in Settings to resume scheduled searches."}
+                  kicker="AUTONOMOUS DISCOVERY"
+                  title={`Candidate review queue · ${discoveryQueue.total}`}
+                />
+                {discoveryQueue.items.length === 0 ? (
+                  <EmptyState
+                    description={preferences.enabled
+                      ? "No candidates are waiting. Enable a ready provider and set at least one region or genre in Settings; the backend will search and queue catalog matches."
+                      : "Enable scheduled discovery and configure at least one region or genre to start collecting candidates."}
+                    icon="database"
+                    title="Queue is clear"
+                  />
+                ) : (
+                  <div className="candidate-list">
+                    {discoveryQueue.items.map((candidate) => (
+                      <article className="candidate-row" key={candidate.id}>
+                        <span className="candidate-avatar"><Icon name="music" size={17} /></span>
+                        <div className="candidate-info">
+                          <b>{candidate.name}</b>
+                          <span>{[candidate.area, candidate.country, candidate.artist_type].filter(Boolean).join(" · ") || "Location not listed"}</span>
+                          {candidate.tags.length > 0 && <div className="candidate-tags">{candidate.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
+                          <a href={candidate.source_url} rel="noreferrer" target="_blank">{candidate.provider_id} source</a>
+                        </div>
+                        <div className="candidate-actions">
+                          <button className="button button-primary" onClick={() => reviewCandidate(candidate, "accepted")} type="button">Add to directory</button>
+                          <button className="button button-secondary" onClick={() => reviewCandidate(candidate, "dismissed")} type="button">Dismiss</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 )}
               </section>
 
@@ -828,15 +845,15 @@ export default function App() {
             <>
               <section className="settings-grid">
                 <article className="settings-panel panel">
-                  <SectionHeading kicker="PERSONALIZE DISCOVERY" title="Search preferences" description="Saved only in this browser; change them any time." />
+                  <SectionHeading kicker="PERSONALIZE DISCOVERY" title="Search preferences" description="These server-side settings control the background discovery schedule." />
                   <form className="preferences-form" onSubmit={savePreferences}>
                     <label>
-                      Default country or region
-                      <input maxLength={120} onChange={(event) => setPreferenceDraft((current) => ({ ...current, area: event.target.value }))} placeholder="For example, Kenya" value={preferenceDraft.area} />
+                      Countries or regions
+                      <textarea maxLength={1400} onChange={(event) => setPreferenceDraft((current) => ({ ...current, area: event.target.value }))} placeholder="For example, Kenya, Ghana" rows={2} value={preferenceDraft.area} />
                     </label>
                     <label>
-                      Preferred genre or scene
-                      <input maxLength={120} onChange={(event) => setPreferenceDraft((current) => ({ ...current, genre: event.target.value }))} placeholder="For example, alternative R&B" value={preferenceDraft.genre} />
+                      Genres or scenes
+                      <textarea maxLength={1400} onChange={(event) => setPreferenceDraft((current) => ({ ...current, genre: event.target.value }))} placeholder="For example, alternative R&B, Afrobeats" rows={2} value={preferenceDraft.genre} />
                     </label>
                     <label>
                       Results per search
@@ -847,42 +864,113 @@ export default function App() {
                       </select>
                     </label>
                     <label className="preference-toggle">
-                      <span><b>Search automatically</b><small>Run a MusicBrainz search when Discovery opens, using saved region or genre filters.</small></span>
-                      <input checked={preferenceDraft.autoSearch} onChange={(event) => setPreferenceDraft((current) => ({ ...current, autoSearch: event.target.checked }))} type="checkbox" />
+                      <span><b>Enable recurring discovery</b><small>The backend searches every configured region/genre combination every 15 minutes and stores new identities in the review queue.</small></span>
+                      <input checked={preferenceDraft.enabled} onChange={(event) => setPreferenceDraft((current) => ({ ...current, enabled: event.target.checked }))} type="checkbox" />
                     </label>
                     <div className="preferences-actions">
-                      <button className="button button-primary" type="submit">Save preferences</button>
+                      <button className="button button-primary" type="submit">Save settings</button>
                       {preferencesMessage && <span aria-live="polite" role="status">{preferencesMessage}</span>}
                     </div>
                   </form>
+                  {preferences.enabled && !preferences.area.trim() && !preferences.genre.trim() && (
+                    <p className="settings-note" role="status">
+                      Scheduled discovery is enabled but has no search filters. Add at least one region or genre to start collecting candidates.
+                    </p>
+                  )}
                 </article>
                 <article className="settings-panel panel">
                   <SectionHeading kicker="SERVICE" title="Backend connection" />
                   <div className="settings-row"><span><Icon name="database" /> API health</span><b className={backendConnected ? "value-positive" : "value-warning"}>{backendConnected ? "Connected" : "Unavailable"}</b></div>
                   <div className="settings-row"><span><Icon name="database" /> Database</span><b>{health?.database || "Unknown"}</b></div>
-                  <div className="settings-row"><span><Icon name="shield" /> Authentication</span><b>Disabled · demo mode</b></div>
+                  <div className="settings-row"><span><Icon name="shield" /> Authentication</span><b>Not configured</b></div>
                   <div className="settings-row"><span><Icon name="people" /> Artist identities</span><b>{loading || error ? "Unknown" : page.total}</b></div>
                 </article>
               </section>
               <section className="provider-settings panel">
                 <SectionHeading
-                  description="Provider access is configured on the Python backend; browser clients never receive provider secrets."
+                  description="Choose which sources power manual and scheduled search. Provider keys are sent only to this backend and never returned to the browser."
                   kicker="SOURCE CONFIGURATION"
-                  title="Data providers"
+                  title={`Data providers · ${providers.length}`}
                 />
-                <div className="provider-grid">
-                  {providers.map((provider) => (
-                    <article className="provider-card" key={provider.id}>
-                      <span className={`provider-icon provider-${provider.id}`}><Icon name={provider.id === "musicbrainz" ? "music" : "database"} size={18} /></span>
-                      <div className="provider-copy">
-                        <div className="provider-name-row"><b>{provider.name}</b><span className={provider.configured ? "provider-state is-configured" : "provider-state"}>{provider.configured ? "Available" : "Not integrated"}</span></div>
-                        <p>{provider.description}</p>
-                        <a href={provider.url} rel="noreferrer" target="_blank">Provider documentation <Icon name="arrow" size={12} /></a>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-                <p className="settings-note">MusicBrainz supplies artist catalog metadata only. Spotify and YouTube search links open their public sites; this app does not fetch their audience, play, or growth metrics. Never paste API secrets into this frontend.</p>
+                <form onSubmit={saveProviders}>
+                  <div className="provider-grid">
+                    {providers.map((provider) => {
+                      const configuredFields = provider.configured_fields || [];
+                      return (
+                        <article className="provider-card" key={provider.id}>
+                          <label className="provider-enable">
+                            <input
+                              checked={selectedProviderIds.includes(provider.id)}
+                              onChange={(event) => setSelectedProviderIds((current) =>
+                                event.target.checked
+                                  ? [...new Set([...current, provider.id])]
+                                  : current.filter((id) => id !== provider.id))}
+                              type="checkbox"
+                            />
+                            <span className={`provider-icon provider-${provider.id}`}><Icon name={provider.id === "musicbrainz" ? "music" : "database"} size={18} /></span>
+                            <span className="provider-copy">
+                              <span className="provider-name-row">
+                                <b>{provider.name}</b>
+                                <span className={`provider-state${provider.status === "available" ? " is-configured" : ""}`}>
+                                  {provider.status === "available" ? "Ready" : provider.status === "needs_credentials" ? "Needs credentials" : "Disabled"}
+                                </span>
+                              </span>
+                              <span className="provider-description">{provider.description}</span>
+                              <span className="provider-access-note">{provider.access_note}</span>
+                              <a href={provider.url} rel="noreferrer" target="_blank">Provider docs <Icon name="arrow" size={12} /></a>
+                            </span>
+                          </label>
+                          {(provider.fields || []).length > 0 && (
+                            <div className="provider-credentials">
+                              {provider.fields.map((field) => {
+                                const credentialId = `${provider.id}.${field.key}`;
+                                const isConfigured = configuredFields.includes(field.key) &&
+                                  !credentialsToClear.includes(credentialId);
+                                return (
+                                  <label key={field.key}>
+                                    {field.label}
+                                    <input
+                                      autoComplete="new-password"
+                                      onChange={(event) => setProviderCredentialDraft((current) => ({
+                                        ...current,
+                                        [provider.id]: {
+                                          ...current[provider.id],
+                                          [field.key]: event.target.value,
+                                        },
+                                      }))}
+                                      disabled={credentialsToClear.includes(credentialId)}
+                                      placeholder={isConfigured ? "Saved · enter to replace" : "Not configured"}
+                                      type={field.secret ? "password" : "text"}
+                                      value={providerCredentialDraft[provider.id]?.[field.key] || ""}
+                                    />
+                                    {isConfigured && (
+                                      <span className="credential-clear">
+                                        <input
+                                          checked={credentialsToClear.includes(credentialId)}
+                                          onChange={(event) => setCredentialsToClear((current) =>
+                                            event.target.checked
+                                              ? [...current, credentialId]
+                                              : current.filter((value) => value !== credentialId))}
+                                          type="checkbox"
+                                        />
+                                        Remove saved value
+                                      </span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <div className="preferences-actions provider-save">
+                    <button className="button button-primary" type="submit">Save provider settings</button>
+                    {providerSettingsMessage && <span aria-live="polite" role="status">{providerSettingsMessage}</span>}
+                  </div>
+                </form>
+                <p className="settings-note">Credentials are encrypted in the backend database with PROVIDER_SECRETS_KEY. Authentication is not configured, so keep the API bound to localhost and do not expose it to untrusted networks. Paid plans, app approval, and provider terms may still be required.</p>
               </section>
             </>
           )}
@@ -890,7 +978,7 @@ export default function App() {
           <footer className="footer">
             <span className="footer-brand"><Icon name="music" size={17} /> BREAKOUT RADAR</span>
             <span>Better data. Better decisions.</span>
-            <span>Unauthenticated demo · not for confidential data</span>
+            <span>Unauthenticated · keep access local</span>
           </footer>
         </div>
       </main>

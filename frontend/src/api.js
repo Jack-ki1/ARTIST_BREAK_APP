@@ -24,6 +24,18 @@ async function request(path, options = {}) {
 
 export const getHealth = () => request("/health");
 export const getProviders = () => request("/providers");
+export const saveProviderSettings = (settings) =>
+  request("/providers", { method: "PUT", body: JSON.stringify(settings) });
+export const getDiscoverySettings = () => request("/discovery/settings");
+export const saveDiscoverySettings = (settings) =>
+  request("/discovery/settings", { method: "PUT", body: JSON.stringify(settings) });
+export const getDiscoveryQueue = ({ status = "pending", limit = 50, offset = 0 } = {}) =>
+  request(`/discovery/queue?status=${encodeURIComponent(status)}&limit=${limit}&offset=${offset}`);
+export const reviewDiscoveryCandidate = (id, status) =>
+  request(`/discovery/queue/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
 export const getArtists = ({ limit = 50, offset = 0 } = {}) =>
   request(`/artists?limit=${limit}&offset=${offset}`);
 export const createArtist = (artist) =>

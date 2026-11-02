@@ -1,29 +1,27 @@
 # Data sources and permissions
 
-## Integrated: MusicBrainz
+## Integrated artist search
 
-The backend's live Discovery search queries the MusicBrainz artist catalog and returns artist identity metadata, area, type, tags, and a source link. Results are not popularity rankings or breakout predictions. A result is stored locally only after the user chooses **Add to directory**, with the MusicBrainz artist page stored as provenance.
+The backend can search these sources through the provider settings:
 
-The API requires no key, but MusicBrainz asks clients to send a meaningful `User-Agent` and make no more than one request per second. The backend serializes and throttles application requests. Set `MUSICBRAINZ_CONTACT` to a real maintainer contact URL or email before public deployment; local development defaults to `http://localhost:5173`.
+- MusicBrainz, Wikidata, and Deezer
+- Spotify, YouTube Data API, Apple Music, Last.fm, Discogs, Google Knowledge Graph
+- TheAudioDB, Jamendo, Audius, Ticketmaster Discovery, SoundCloud, Musixmatch, and Genius
 
-Official references:
+Each adapter returns provider-attributed artist identity metadata. Sources differ in coverage, authentication, rate limits, approval requirements, commercial-use terms, and response quality. A provider marked ready only means the required credentials are present; it does not guarantee that the provider will accept a request.
 
-- [MusicBrainz API](https://musicbrainz.org/doc/MusicBrainz_API)
-- [MusicBrainz API rate limiting](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting)
+Enter credentials in **Settings → Data providers**. Credentials are encrypted by the backend with `PROVIDER_SECRETS_KEY`. Do not put credentials in frontend code or browser storage. Review the current provider documentation and terms before enabling an integration for ongoing or commercial use.
 
-## Not integrated: Spotify and YouTube
+MusicBrainz, Wikidata, and Deezer do not require credentials for the implemented search paths. MusicBrainz requests are serialized and limited to about one request per second. Other providers require the relevant API key, application credentials, or access token; Audius requires an application name.
 
-The candidate panel provides clearly labeled outbound Spotify and YouTube search links for human verification. The application does not call either provider's API or report their audience/play counts.
+## Scheduled and manual discovery
 
-- Spotify integration needs an approved Spotify developer application and server-side credentials. See [Spotify Search API](https://developer.spotify.com/documentation/web-api/reference/search).
-- YouTube Data API needs a server-side API key and quota management. Search calls consume quota and can return channels, videos, or playlists rather than verified artist identities. See [YouTube Search API](https://developers.google.com/youtube/v3/docs/search/list).
-
-Do not put provider secrets in frontend code or browser storage. Before integrating another API, verify account authorization, current terms, commercial eligibility, quotas, retention, caching, deletion, and attribution requirements.
+Manual search queries enabled providers and reports provider-specific errors. Scheduled discovery runs every 15 minutes while the backend is running, but requires at least one region or genre and at least one ready enabled provider. With no region/genre filters configured, the scheduler intentionally skips the cycle. The **East Africa** shortcut searches Burundi, Comoros, Djibouti, Eritrea, Ethiopia, Kenya, Madagascar, Malawi, Mauritius, Mozambique, Rwanda, Seychelles, Somalia, South Sudan, Tanzania, Uganda, Zambia, and Zimbabwe. **Central Africa** searches Angola, Cameroon, the Central African Republic, Chad, Congo, the Democratic Republic of the Congo, Equatorial Guinea, Gabon, and Sao Tome and Principe. These country-level searches use sovereign states; territories are excluded. New scheduled results enter a review queue; they are not added to the artist directory until accepted.
 
 ## Data integrity
 
-- MusicBrainz catalog presence does not mean an artist is emerging, popular, or worth signing.
+- Catalog presence does not indicate that an artist is emerging, popular, or worth signing.
 - No artist images, follower counts, scores, audience growth, or recommendation data are fabricated.
-- External records are not persisted until a user explicitly saves an identity.
-- Provider outages and invalid responses are shown as errors rather than sample results.
-- The demo login is presentation-only; it does not provide authorization or change the backend's unauthenticated status.
+- Search results preserve provider identity and source links.
+- Provider outages, missing credentials, and invalid responses are reported rather than replaced with sample results.
+- This local workspace does not authenticate API callers; keep it bound to localhost and do not expose it to untrusted networks.
