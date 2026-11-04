@@ -373,7 +373,7 @@ function RecommendationsSection({ recommendations, reload, notify }) {
   </div>;
 }
 
-function SettingsSection({ sources, setSources, settings, setSettings, onSaveSources, onSaveSettings, savingSources, savingSettings, notify }) {
+function SettingsSection({ sources, setSources, settings, setSettings, automation, onSaveSources, onSaveSettings, savingSources, savingSettings, notify }) {
   const [sourceQuery, setSourceQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [expanded, setExpanded] = useState("");
@@ -626,7 +626,7 @@ export default function App() {
           section === "discovery" ? <DiscoverySection dashboard={dashboard} candidates={candidates} artists={artists} sources={sources} loading={loading} running={running} filters={filters} setFilters={setFilters} onRun={onRun} onReview={onReview} selectedArtist={selectedArtist} setSelectedArtist={(id) => {setSelectedArtist(id);setSection("analyse");}}/> :
           section === "analyse" ? <AnalyseSection artists={artists} selectedArtist={selectedArtist} setSelectedArtist={setSelectedArtist} artistDetail={artistDetail} reloadDetail={refreshDetail} busy={busy} notify={notify}/> :
           section === "recommendations" ? <RecommendationsSection recommendations={recommendations} reload={reloadRecommendations} notify={notify}/> :
-          <SettingsSection sources={sources} setSources={setSources} settings={settings} setSettings={setSettings} onSaveSources={onSaveSources} onSaveSettings={onSaveSettings} savingSources={savingSources} savingSettings={savingSettings} notify={notify}/>}
+          <SettingsSection sources={sources} setSources={setSources} settings={settings} setSettings={setSettings} automation={automation} onSaveSources={onSaveSources} onSaveSettings={onSaveSettings} savingSources={savingSources} savingSettings={savingSettings} notify={notify}/>}
       </div>
       <footer className="app-footer"><span>BREAKOUT RADAR <b>v3.1</b></span><span>Evidence first. People decide.</span><span>{health?.authentication || "Local environment"}</span></footer>
     </main>
