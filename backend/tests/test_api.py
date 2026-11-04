@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -57,6 +58,25 @@ def test_youtube_daily_request_budget_is_persisted_and_enforced(client, monkeypa
     assert claim_provider_call(main.SessionLocal, "youtube") is True
     assert claim_provider_call(main.SessionLocal, "youtube") is True
     assert claim_provider_call(main.SessionLocal, "youtube") is False
+
+
+def test_youtube_daily_budget_resets_at_midnight_pacific_time(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_SEARCH_DAILY_BUDGET", "1")
+
+    # 07:59 UTC is 23:59 Pacific on Jan 1 (PST); 08:00 UTC is
+    # midnight Pacific on Jan 2. The quota must roll over at that instant.
+    before_reset = datetime(2026, 1, 2, 7, 59, tzinfo=timezone.utc)
+    after_reset = datetime(2026, 1, 2, 8, 0, tzinfo=timezone.utc)
+
+    assert claim_provider_call(main.SessionLocal, "youtube", before_reset) is True
+    assert claim_provider_call(main.SessionLocal, "youtube", before_reset) is False
+    assert claim_provider_call(main.SessionLocal, "youtube", after_reset) is True
+
+    # In summer, midnight Pacific is 07:00 UTC (PDT); DST is handled by ZoneInfo.
+    summer_before = datetime(2026, 7, 2, 6, 59, tzinfo=timezone.utc)
+    summer_after = datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc)
+    assert claim_provider_call(main.SessionLocal, "youtube", summer_before) is True
+    assert claim_provider_call(main.SessionLocal, "youtube", summer_after) is True
 
 
 def test_provider_search_retries_rate_limited_requests():
