@@ -1,4 +1,4 @@
-"""Runtime metadata for 69 configurable data sources."""
+"""Runtime metadata for 73 configurable data sources."""
 from __future__ import annotations
 
 from typing import Any
@@ -12,10 +12,10 @@ LEGACY_PROVIDER_IDS = {
     "ticketmaster", "soundcloud", "musixmatch", "genius",
 }
 EXTRA_IMPLEMENTED_IDS = {
-    "wikipedia", "itunes", "bluesky", "mastodon", "gdelt", "setlistfm",
-    "twitch", "reddit", "flickr", "openverse",
+    "wikipedia", "itunes", "bluesky", "mastodon", "setlistfm", "twitch",
 }
-IMPLEMENTED_IDS = LEGACY_PROVIDER_IDS | EXTRA_IMPLEMENTED_IDS
+EVIDENCE_IMPLEMENTED_IDS = {"gdelt", "reddit", "flickr", "openverse"}
+IMPLEMENTED_IDS = LEGACY_PROVIDER_IDS | EXTRA_IMPLEMENTED_IDS | EVIDENCE_IMPLEMENTED_IDS
 _ROWS = CORE + EXTRA
 
 
@@ -35,6 +35,7 @@ def source_catalog(enabled: set[str] | None = None, credentials: dict[str, str] 
         source_id, name, category, access, docs, description, fields, note = row
         missing = [key for key, _label, _secret in fields if not credentials.get(f"{source_id}.{key}")]
         supported = source_id in IMPLEMENTED_IDS
+        capability = "identity_search" if source_id in (LEGACY_PROVIDER_IDS | EXTRA_IMPLEMENTED_IDS) else ("evidence_enrichment" if source_id in EVIDENCE_IMPLEMENTED_IDS else "catalogue_only")
         if source_id not in enabled:
             state = "disabled"
         elif not supported:
@@ -60,7 +61,8 @@ def source_catalog(enabled: set[str] | None = None, credentials: dict[str, str] 
                 for key, label, secret in fields
             ],
             "missing_fields": missing, "enabled": source_id in enabled,
-            "implemented": supported, "connected": state == "ready",
+            "implemented": supported, "capability": capability,
+            "connected": state == "ready",
             "status": state, "access_note": note,
         })
     return result
