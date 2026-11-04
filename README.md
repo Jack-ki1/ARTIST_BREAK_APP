@@ -37,7 +37,7 @@ The initial configuration enables recurring discovery every 6 hours and evidence
 - Cross-source artist grouping uses a normalized-name key and retains provider identifiers separately.
 - Accepted identities are rechecked on later scans. New metric observations are appended with provider, metric, scope, timestamp and source URL.
 
-**A catalogue entry is not a claim that its provider is connected.** A source displays Ready when the application has an implemented adapter and its locally required credentials are present. This is not a live credential-validation guarantee. Sources with restricted access are not called by discovery just because they appear in the directory.
+**A catalogue entry is not a claim that its provider is connected.** A source displays Ready when the application has an implemented adapter and its locally required credentials are present. This is not a live credential-validation guarantee. Sources with restricted access are not called by discovery just because they appear in the directory. Review [the verified provider access notes](docs/PROVIDER_ACCESS_NOTES.md) before enabling any credentialed, research-only or commercial data source.
 
 ### Analysis and decision support
 
