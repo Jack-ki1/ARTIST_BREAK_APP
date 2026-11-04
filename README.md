@@ -385,7 +385,7 @@ Acceptance is explicit.
 - `pip` for installing dependencies.
 - Network access to the selected external provider APIs.
 
-The CI workflow currently tests the backend with Python 3.11.
+The CI workflow tests the backend with Python 3.13.
 
 ### Frontend
 
@@ -1345,11 +1345,9 @@ make test PYTHON=/path/to/python
    publish `ARTIST_BREAK_APP.zip` as a workflow artifact.
 
 The pre-commit configuration includes whitespace and YAML/JSON checks, Ruff,
-ESLint, Prettier, and Gitleaks. Those hooks are optional until pre-commit is
-installed and configured by the contributor.
-
-The Makefile's lint target currently ignores non-zero exits from Ruff and
-ESLint. Run those tools directly when their results need to gate a change.
+ESLint, Prettier, and Gitleaks. Install `pre-commit` and run `make lint` to
+execute the configured hooks. The lint target fails when pre-commit is missing
+or when a hook reports an error; it does not suppress failed checks.
 
 ## Common operational issues
 
