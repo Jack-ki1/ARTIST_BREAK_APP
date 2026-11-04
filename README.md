@@ -7,7 +7,7 @@ Breakout Radar is an Africa-first artist discovery and A&R research workspace. I
 3. **Recommendations** — combine discovery evidence with artistic judgement and record explicit A&R decisions.
 4. **Settings** — configure 73 data-source entries, credentials, discovery seeds, guardrails and scoring weights.
 
-The UI borrows the dark, high-contrast, chart-led design language of the pixel-perfect-replica demo. Its data model and operating workflows are a new implementation for this repository.
+The UI follows the supplied light workspace reference: a white canvas, fixed left navigation, persistent top search, blue-violet active states and responsive three-column provider cards. Its data model and operating workflows are a new implementation for this repository.
 
 ## Fastest local start (Docker)
 
@@ -55,7 +55,7 @@ The initial configuration enables recurring discovery every 6 hours and evidence
 - Provider credentials are encrypted at rest using Fernet.
 - YouTube search requests are reserved against a persistent daily budget (80 by default) using Google's midnight-Pacific reset day, including daylight-saving changes.
 - A manual discovery run has an estimated upstream-call ceiling (MAX_PROVIDER_CALLS_PER_SEARCH, default 100).
-- Scheduled discovery is opt-in and runs through a separate worker process.
+- Scheduled discovery is enabled by default (every 6 hours) and can be paused in Settings; the separate worker process must be running for scheduled scans and evidence refresh to occur.
 - API and worker should be run as one worker each against the same database until distributed locking is configured.
 
 ## Architecture
