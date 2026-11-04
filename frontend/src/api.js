@@ -42,10 +42,25 @@ export const createArtist = (artist) =>
   request("/artists", { method: "POST", body: JSON.stringify(artist) });
 export const deleteArtist = (id) =>
   request(`/artists/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const searchArtists = ({ query, area, genre, limit = 10, offset = 0 }) => {
+export const searchArtists = ({
+  query = "",
+  area = "",
+  genre = "",
+  areas,
+  genres,
+  limit = 10,
+  offset = 0,
+}) => {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (query.trim()) params.set("query", query.trim());
-  if (area.trim()) params.set("area", area.trim());
-  if (genre.trim()) params.set("genre", genre.trim());
+
+  const areaFilters = Array.isArray(areas) ? areas : (area.trim() ? [area.trim()] : []);
+  const genreFilters = Array.isArray(genres) ? genres : (genre.trim() ? [genre.trim()] : []);
+  for (const value of areaFilters) {
+    if (typeof value === "string" && value.trim()) params.append("area", value.trim());
+  }
+  for (const value of genreFilters) {
+    if (typeof value === "string" && value.trim()) params.append("genre", value.trim());
+  }
   return request(`/discovery/search?${params}`);
 };
