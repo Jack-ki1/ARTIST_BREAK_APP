@@ -341,9 +341,11 @@ async def discover_artists(
             "genre": genres[0] if len(genres) == 1 else None,
             "limit": limit,
             "offset": offset,
-            "areas": areas if len(areas) > 1 else None,
-            "genres": genres if len(genres) > 1 else None,
         }
+        if len(areas) > 1:
+            search_filters["areas"] = areas
+        if len(genres) > 1:
+            search_filters["genres"] = genres
         if "youtube" in enabled_provider_ids:
             search_filters["quota_session_factory"] = SessionLocal
         result = await search_enabled_providers(
