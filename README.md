@@ -1258,7 +1258,7 @@ corrupted encrypted data explicitly.
 | `CORS_ORIGINS` | localhost Vite origins | Comma-separated browser origins accepted by the API |
 | `LOG_LEVEL` | `INFO` | Python logging level passed to `logging.basicConfig` |
 | `MUSICBRAINZ_CONTACT` | Repository issue tracker example | Contact hint included in the MusicBrainz User-Agent; replace with a maintained contact |
-| `YOUTUBE_SEARCH_DAILY_BUDGET` | `80` | Persistent YouTube search.list request budget per UTC day |
+| `YOUTUBE_SEARCH_DAILY_BUDGET` | `80` | Persistent YouTube search.list request budget per Pacific Time day |
 | `MAX_PROVIDER_CALLS_PER_SEARCH` | `100` | Maximum estimated upstream calls accepted by one manual search |
 | `MAX_SCHEDULED_PROVIDER_CALLS_PER_CYCLE` | `100` | Maximum provider calls in one scheduled discovery cycle |
 | `PROVIDER_SECRETS_KEY` | unset | Fernet key required to store/decrypt provider credentials |
@@ -1448,7 +1448,7 @@ Check official references in Settings and
 ### Quotas and scheduler fan-out
 
 The scheduler now maintains a persistent daily request ledger for YouTube
-search.list calls, with a conservative default budget of 80 per UTC day. Manual
+search.list calls, with a conservative default budget of 80 per Pacific Time day. Manual
 searches are capped at an estimated 100 upstream calls, and scheduled cycles
 default to 100 provider requests. These controls prevent unbounded fan-out, but
 they are not a substitute for verifying each provider's own quota, contract,
