@@ -234,7 +234,7 @@ def _recompute_artist(db: Session, artist: Artist, settings: dict) -> None:
     growths = []
     for (_source, metric), points in series.items():
         if metric in {"followers", "fans", "subscribers"}:
-            momentum = source_momentum(points, metric)
+            momentum = source_momentum(points, metric, float(settings.get("min_observation_days", 7)))
             if momentum is not None:
                 growths.append(momentum)
     features = {
