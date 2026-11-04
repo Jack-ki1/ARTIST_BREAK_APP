@@ -84,7 +84,7 @@ PROVIDER_CATALOG: list[dict[str, Any]] = [
             {"key": "client_id", "label": "Client ID", "secret": False},
             {"key": "client_secret", "label": "Client secret", "secret": True},
         ],
-        "access_note": "Requires a Spotify developer application. New-app access and commercial-use limits apply.",
+        "access_note": "Requires an approved Spotify developer application. Spotify policy restricts derived listenership metrics and use of Spotify content in ML/AI training.",
     },
     {
         "id": "youtube",
@@ -580,11 +580,7 @@ async def search_provider(
             return [
                 _normalize("ticketmaster", item["id"], item["name"],
                            item.get("url", f"https://www.ticketmaster.com/artist/{item['id']}"),
-                           disambiguation=(
-                               f"{(item.get('upcomingEvents') or {}).get('_total')} upcoming events"
-                               if (item.get("upcomingEvents") or {}).get("_total") is not None
-                               else None
-                           ))
+                           disambiguation=None)
                 for item in payload.get("_embedded", {}).get("attractions", [])
                 if item.get("id") and item.get("name")
             ]
