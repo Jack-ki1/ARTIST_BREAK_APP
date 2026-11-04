@@ -498,6 +498,10 @@ def list_candidates(
 ) -> dict:
     rows = db.scalars(select(ArtistCandidate).where(ArtistCandidate.status == "pending").order_by(ArtistCandidate.discovery_score.desc(), ArtistCandidate.last_seen_at.desc()).limit(1500)).all()
     grouped = _candidate_group(rows)
+    minimum_sources = max(1, int(_settings(db).get("min_sources_for_candidate", 2)))
+    for item in grouped:
+        item["corroborated"] = item["source_count"] >= minimum_sources
+        item["corroboration_requirement"] = minimum_sources
     if q:
         grouped = [x for x in grouped if q.casefold() in x["name"].casefold()]
     return {"items": grouped[:limit], "total": len(grouped), "sources_scanned": sorted({x.source_id for x in rows})}
@@ -589,6 +593,18 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
             normalized = _normalise_name(name)
             if not normalized:
                 continue
+            excluded = [_normalise_name(value) for value in settings.get("exclude_names", []) if value]
+            if any(term and (normalized == term or normalized.startswith(term + " ")) for term in excluded):
+                continue
+            limits = settings.get("emerging_limits", DEFAULT_SETTINGS["emerging_limits"])
+            source_metrics = item.get("metrics") or {}
+            try:
+                if float(source_metrics.get("fans") or 0) > float(limits.get("max_known_follower_count", 500000)):
+                    continue
+                if float(source_metrics.get("albums") or 0) > float(limits.get("max_catalog_releases", 35)):
+                    continue
+            except (TypeError, ValueError):
+                logger.warning("Invalid emerging-artist guardrail values; source-specific filters skipped")
 
             # Once an A&R reviewer has accepted a cross-source identity, future
             # scans append a new source-scoped observation instead of recreating
