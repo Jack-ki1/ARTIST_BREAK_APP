@@ -5,7 +5,7 @@ The app has a working React/Vite frontend, Python/FastAPI backend, persistent ar
 ## Completed hardening
 
 - Upgrade the frontend toolchain and CI runner to a compatible Node 24 runtime.
-- Add a persistent UTC-day YouTube `search.list` request budget with a default of 80.
+- Add a persistent Pacific-day YouTube `search.list` request budget with a default of 80.
 - Bound manual and scheduled provider fan-out and skip providers without credentials.
 - Retry transient provider transport failures and HTTP 429/5xx responses with bounded backoff.
 - Batch multi-region/genre discovery in one browser-to-API request and deduplicate provider identities.
