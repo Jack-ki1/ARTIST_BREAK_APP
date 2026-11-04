@@ -1,110 +1,70 @@
-# Assisted work summary
+# Assisted rebuild record
 
-This note records the implementation, debugging, and documentation work
-completed during the assisted project sessions. It contains no API keys or
-provider credentials.
+This file records the repository audit and the hardening work in the
+`rebuild/production-hardening` branch. It contains no provider credentials,
+encryption keys, or local database content.
 
-## Product and repository understanding
+## Verified baseline
 
-- Reviewed the project audit, README, change notes, architecture, existing app
-  structure, and supporting documentation before making implementation changes.
-- Confirmed that the active application is in `backend/` and `frontend/`.
-- Identified `apps/`, `packages/`, and `infra/` as future-organization
-  placeholders rather than active duplicate services.
-- Kept the product evidence-first: catalog metadata is not presented as
-  audience growth, artist potential, or a recommendation.
+- The application is a React/Vite frontend and Python/FastAPI backend.
+- The live application code is under `frontend/` and `backend/`; `apps/`,
+  `packages/`, and `infra/` are future-layout placeholders.
+- It supports artist catalogue search, provider configuration, a local artist
+  identity directory, a scheduled discovery queue, and human review.
+- It does not yet implement historical audience analytics, artistic scoring,
+  validated breakout prediction, or automated recommendations.
+- The backend API has no caller authentication and must remain on loopback or
+  behind a trusted access-controlled network.
 
-## Discovery and provider implementation
+## Rebuild changes completed and CI-verified
 
-- Added a common provider catalog and normalized artist result shape for 16
-  integrations:
-  MusicBrainz, Wikidata, Deezer, Spotify, YouTube Data API, Apple Music,
-  Last.fm, Discogs, Google Knowledge Graph, TheAudioDB, Jamendo, Audius,
-  Ticketmaster Discovery, SoundCloud, Musixmatch, and Genius.
-- Added provider enablement, credential field metadata, readiness states,
-  credential updates/removal, and provider-specific search errors.
-- Added Fernet encryption for provider credentials stored in the database.
-  The operator must supply and preserve `PROVIDER_SECRETS_KEY`.
-- Added a backend scheduler that runs every 15 minutes while the API process is
-  running. It searches enabled providers over saved region/genre filters and
-  stores new identities in a review queue.
-- Kept scheduled matches separate from artist records until an operator
-  accepts them.
-- Added East Africa and Central Africa search shortcuts that expand to
-  country-level searches. These named regions are saved in the local discovery
-  configuration.
-- Live manual searches against MusicBrainz, Wikidata, Deezer, and Audius
-  previously returned results. Not all adapters have been verified against
-  live services or production credentials.
+- Raised the supported frontend runtime to Node 24.15+ and upgraded GitHub
+  Actions to Node 24-compatible action releases.
+- Added a persistent per-UTC-day request ledger for YouTube search.list calls.
+  The default budget is 80 to leave headroom below the standard 100-call
+  allocation; operators can configure the budget for their approved project.
+- Added bounded retries with Retry-After support for transient provider errors.
+- Corrected provider status handling for an explicitly empty provider selection.
+- Corrected TheAudioDB source links to use artist identity URLs rather than
+  artwork URLs, and stopped treating Ticketmaster event counts as identity
+  disambiguation.
+- Consolidated multi-region and multi-genre discovery into one API request,
+  deduplicated provider results, and imposed request fan-out limits.
+- Added a per-cycle scheduler cap, credential-readiness checks, and small
+  scheduling jitter.
+- Added regression tests for quota enforcement, transient retries, batching,
+  and deduplication.
+- Updated CI to package the tested source and production frontend into a
+  downloadable `ARTIST_BREAK_APP.zip` artifact after the test jobs pass.
 
-## Diagnosis of missing results
+## Remaining production work (not included in this rebuild)
 
-- Confirmed that the API was healthy and that manual MusicBrainz search
-  returned artist records.
-- Found that the local discovery settings had empty region and genre arrays.
-  The scheduler intentionally skips a cycle when both are empty.
-- Confirmed that MusicBrainz was the only enabled provider in the local
-  configuration.
-- Direct MusicBrainz searches using the raw strings `East Africa` and
-  `Central Africa` returned no matches.
-- Implemented expansion of these two filters to country names and added
-  backend tests for manual and scheduled expansion.
-- Saved the East Africa and Central Africa filters, with no genre filter, in
-  the local database. A live scheduled cycle populated the queue; the observed
-  pending count was 140, and a later check showed 210. These are mutable local
-  database results, not guaranteed fixtures.
-- Clarified the Settings UI and documentation to explain that a region or genre
-  filter, an enabled provider, and a running backend are required.
+- Add Alembic migrations and deployment-safe schema upgrades.
+- Operate scheduled collection in a separate durable worker with distributed
+  locking and provider-wide rate coordination.
+- Add authenticated users, roles, workspace isolation, and audit history before
+  any internet-facing deployment.
+- Verify every external adapter with current approved credentials, quotas,
+  terms, retention, and attribution requirements.
+- Add a canonical cross-provider artist identity/identifier model.
+- Build time-stamped audience observations only from authorised sources.
+- Add structured artistic reviews and evidence references before building
+  predictive models.
+- Evaluate audio models only against audio the project has permission to
+  process and licences compatible with the intended deployment.
 
-## Workspace and interface changes
+## Verification
 
-- Removed the client-side sign-in gate and made the workspace open directly.
-- Removed sign-in-only styling and replaced source-specific Discovery copy with
-  multi-provider wording.
-- Added clearer messages when discovery is enabled but no search filters are
-  set, and avoided displaying the empty-results state when provider errors
-  explain the empty response.
-- Retained the local-only security warning because API authentication is not
-  implemented.
-- Updated root and data-source documentation to describe actual provider
-  behavior and distinguish implemented features from planned work.
+GitHub Actions run `41801165096` completed successfully on the rebuild branch:
 
-## Documentation delivered
+- Backend: 22 tests passed, with no pytest deprecation warnings.
+- Frontend: 8 tests passed.
+- Vite 8.3.5 production build completed successfully.
+- Release packaging job rebuilt the production frontend, assembled the source
+  archive, passed `unzip -t`, and uploaded artifact `13306734941`.
+- The downloaded project ZIP was independently checked: 68 archive entries,
+  valid ZIP integrity, includes frontend production assets, and contains no
+  `.env`, local databases, `node_modules`, or virtual environments.
 
-- Replaced the short README with a detailed project and operator guide. It
-  documents the repository map, file responsibilities, architecture, setup,
-  configuration, providers, discovery, queue, artist data, API routes, data
-  model, security boundaries, tests, troubleshooting, and limitations.
-- Added this `ai.md` progress summary.
-
-## Verification run
-
-- Backend: 17 tests passed, including credential handling, region expansion,
-  scheduling, queue operations, and artist endpoints.
-- Frontend: 7 tests passed.
-- Frontend production build completed successfully.
-- Pylance diagnostics for the changed backend/provider/scheduler/test files
-  reported no diagnostics.
-- `git diff --check` completed without whitespace errors.
-- A local live search for an artist returned a MusicBrainz result.
-
-The existing local virtual-environment launcher points to a different
-workspace path. Backend tests were run using the available system `python3`
-environment rather than that stale launcher.
-
-## Operational cautions
-
-- The backend API is unauthenticated and must remain on localhost or a trusted,
-  access-controlled network.
-- The scheduler is in-process and should run with one backend worker. Multiple
-  workers can start duplicate scheduler tasks.
-- Many provider adapters require operator-supplied credentials and API
-  approval. Provider readiness only checks saved credential fields; it does
-  not verify credentials against the provider.
-- Provider quotas are not tracked by the scheduler. Large filter/provider
-  combinations, especially on quota-limited services, can exhaust upstream
-  quotas.
-- Database startup creates missing tables but does not migrate changed schemas.
-- Analyze, Recommend, scoring, audience measurements, and a separate worker
-  remain unimplemented.
-
+The branch is available in pull request #1. The main branch has not been
+modified or merged.

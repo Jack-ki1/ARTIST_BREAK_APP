@@ -13,6 +13,7 @@ from app.database import SessionLocal, create_database_tables, engine, get_db
 from app.models import Artist, DiscoveryCandidate, DiscoveryConfiguration, ProviderConfiguration
 from app.providers import (
     PROVIDER_CATALOG,
+    expand_area_filter,
     provider_status,
     search_enabled_providers,
     search_provider,
@@ -180,7 +181,7 @@ def update_providers(
     unknown_ids = sorted(set(enabled_ids) - specs.keys())
     if unknown_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown provider IDs: {', '.join(unknown_ids)}",
         )
 
@@ -198,14 +199,14 @@ def update_providers(
     for provider_id, values in payload.credential_updates.items():
         if provider_id not in specs:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Unknown provider ID: {provider_id}",
             )
         allowed_fields = {field["key"] for field in specs[provider_id]["fields"]}
         unknown_fields = sorted(set(values) - allowed_fields)
         if unknown_fields:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Unknown credential fields for {provider_id}: {', '.join(unknown_fields)}",
             )
         for key, value in values.items():
@@ -216,7 +217,7 @@ def update_providers(
     for credential_key in payload.clear_credentials:
         if "." not in credential_key:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Credential keys must use provider_id.field_name",
             )
         provider_id, field_name = credential_key.split(".", 1)
@@ -225,7 +226,7 @@ def update_providers(
             or field_name not in {field["key"] for field in specs[provider_id]["fields"]}
         ):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Unknown credential field: {credential_key}",
             )
         credentials.pop(credential_key, None)
@@ -283,24 +284,29 @@ def update_discovery_settings(
 @app.get("/api/discovery/search", response_model=DiscoveryPage)
 async def discover_artists(
     query: str | None = Query(default=None, min_length=1, max_length=120),
-    area: str | None = Query(default=None, min_length=1, max_length=120),
-    genre: str | None = Query(default=None, min_length=1, max_length=120),
+    area: list[str] = Query(default=[]),
+    genre: list[str] = Query(default=[]),
     limit: int = Query(default=10, ge=1, le=25),
     offset: int = Query(default=0, ge=0, le=1000),
     db: Session = Depends(get_db),
 ) -> DiscoveryPage:
-    filters = {
-        "query": query.strip() if query else None,
-        "area": area.strip() if area else None,
-        "genre": genre.strip() if genre else None,
-        "limit": limit,
-        "offset": offset,
-    }
-    if not any((filters["query"], filters["area"], filters["genre"])):
+    query_text = query.strip() if query else None
+    areas = list(dict.fromkeys(value.strip() for value in area if value.strip()))
+    genres = list(dict.fromkeys(value.strip() for value in genre if value.strip()))
+    if not any((query_text, areas, genres)):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Enter an artist, region, or genre to search the enabled providers",
         )
+
+    area_filters = areas or [None]
+    genre_filters = genres or [None]
+    if len(area_filters) * len(genre_filters) > 25:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A search can include at most 25 region/genre combinations",
+        )
+
     try:
         configuration = db.get(ProviderConfiguration, 1)
         enabled_provider_ids = (
@@ -309,10 +315,49 @@ async def discover_artists(
         credentials = decrypt_credentials(
             configuration.encrypted_credentials if configuration else None
         )
+        configured_providers = provider_status(enabled_provider_ids, credentials)
+        ready_provider_count = sum(
+            1 for item in configured_providers
+            if item["enabled"] and item["configured"]
+        )
+        estimated_calls = (
+            sum(len(expand_area_filter(area_value)) for area_value in area_filters)
+            * len(genre_filters)
+            * ready_provider_count
+        )
+        try:
+            max_provider_calls = max(
+                1, int(os.getenv("MAX_PROVIDER_CALLS_PER_SEARCH", "100"))
+            )
+        except ValueError:
+            max_provider_calls = 100
+        if estimated_calls > max_provider_calls:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"This filter/provider combination would make about {estimated_calls} "
+                    "upstream requests. Reduce regions, genres, or enabled providers; "
+                    f"the per-search safety limit is {max_provider_calls}."
+                ),
+            )
+
+        search_filters = {
+            "query": query_text,
+            "area": areas[0] if len(areas) == 1 else None,
+            "genre": genres[0] if len(genres) == 1 else None,
+            "limit": limit,
+            "offset": offset,
+        }
+        if len(areas) > 1:
+            search_filters["areas"] = areas
+        if len(genres) > 1:
+            search_filters["genres"] = genres
+        if "youtube" in enabled_provider_ids:
+            search_filters["quota_session_factory"] = SessionLocal
         result = await search_enabled_providers(
             enabled_provider_ids,
             credentials,
-            **filters,
+            **search_filters,
         )
     except RuntimeError as exc:
         logger.exception("Could not run configured discovery providers")

@@ -1,8 +1,10 @@
 import asyncio
+import email.utils
 import hashlib
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -82,7 +84,7 @@ PROVIDER_CATALOG: list[dict[str, Any]] = [
             {"key": "client_id", "label": "Client ID", "secret": False},
             {"key": "client_secret", "label": "Client secret", "secret": True},
         ],
-        "access_note": "Requires a Spotify developer application. New-app access and commercial-use limits apply.",
+        "access_note": "Requires an approved Spotify developer application. Spotify policy restricts derived listenership metrics and use of Spotify content in ML/AI training.",
     },
     {
         "id": "youtube",
@@ -230,6 +232,25 @@ def expand_area_filter(area: str | None) -> list[str | None]:
     return REGIONAL_AREA_COUNTRIES.get(area.strip().casefold(), [area])
 
 
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    """Return a bounded retry delay, preferring the provider's Retry-After value."""
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(max(float(retry_after), 0.0), 10.0)
+            except ValueError:
+                try:
+                    retry_at = email.utils.parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                    return min(max(delay, 0.0), 10.0)
+                except (TypeError, ValueError, OverflowError):
+                    logger.debug("Ignoring invalid Retry-After header: %r", retry_after)
+    return min(0.5 * (2 ** attempt), 4.0)
+
+
 async def _get_json(
     client: httpx.AsyncClient,
     url: str,
@@ -237,24 +258,44 @@ async def _get_json(
     params: dict[str, Any],
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    try:
-        response = await client.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        payload = response.json()
-    except httpx.TimeoutException as exc:
-        raise RuntimeError("The provider did not respond in time") from exc
-    except httpx.HTTPStatusError as exc:
-        logger.warning("Provider request returned HTTP %s", exc.response.status_code)
-        raise RuntimeError(f"Provider search failed (HTTP {exc.response.status_code})") from exc
-    except httpx.RequestError as exc:
-        logger.warning("Provider request failed: %s", exc)
-        raise RuntimeError("Could not reach the provider") from exc
-    except ValueError as exc:
-        raise RuntimeError("Provider returned invalid JSON") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("Provider returned an unexpected response")
-    return payload
+    """Fetch JSON with bounded retries for transient transport and upstream errors."""
+    retryable_statuses = {429, 500, 502, 503, 504}
+    last_transport_error: httpx.RequestError | None = None
 
+    for attempt in range(3):
+        response: httpx.Response | None = None
+        try:
+            response = await client.get(url, params=params, headers=headers)
+            if response.status_code in retryable_statuses and attempt < 2:
+                await asyncio.sleep(_retry_delay(response, attempt))
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise RuntimeError("Provider returned an unexpected response")
+            return payload
+        except httpx.TimeoutException as exc:
+            last_transport_error = exc
+            if attempt < 2:
+                await asyncio.sleep(_retry_delay(None, attempt))
+                continue
+            raise RuntimeError("The provider did not respond in time") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Provider request returned HTTP %s", exc.response.status_code)
+            raise RuntimeError(
+                f"Provider search failed (HTTP {exc.response.status_code})"
+            ) from exc
+        except httpx.RequestError as exc:
+            last_transport_error = exc
+            if attempt < 2:
+                await asyncio.sleep(_retry_delay(None, attempt))
+                continue
+            logger.warning("Provider request failed: %s", exc)
+            raise RuntimeError("Could not reach the provider") from exc
+        except ValueError as exc:
+            raise RuntimeError("Provider returned invalid JSON") from exc
+
+    raise RuntimeError("Provider request failed after retries") from last_transport_error
 
 async def _search_musicbrainz(
     client: httpx.AsyncClient,
@@ -289,7 +330,7 @@ async def _search_musicbrainz(
             headers={
                 "User-Agent": (
                     "BreakoutRadar/1.0 "
-                    f"({os.getenv('MUSICBRAINZ_CONTACT', 'http://localhost:5173')})"
+                    f"({os.getenv('MUSICBRAINZ_CONTACT', 'https://github.com/Jack-ki1/ARTIST_BREAK_APP/issues')})"
                 ),
                 "Accept": "application/json",
             },
@@ -502,7 +543,7 @@ async def search_provider(
             )
             return [
                 _normalize("theaudiodb", item["idArtist"], item["strArtist"],
-                           item.get("strArtistFanart") or f"https://www.theaudiodb.com/artist/{item['idArtist']}",
+                           f"https://www.theaudiodb.com/artist/{item['idArtist']}",
                            country=item.get("strCountry"), tags=[item.get("strGenre", "")])
                 for item in payload.get("artists") or [] if item.get("idArtist") and item.get("strArtist")
             ][:limit]
@@ -539,11 +580,7 @@ async def search_provider(
             return [
                 _normalize("ticketmaster", item["id"], item["name"],
                            item.get("url", f"https://www.ticketmaster.com/artist/{item['id']}"),
-                           disambiguation=(
-                               f"{(item.get('upcomingEvents') or {}).get('_total')} upcoming events"
-                               if (item.get("upcomingEvents") or {}).get("_total") is not None
-                               else None
-                           ))
+                           disambiguation=None)
                 for item in payload.get("_embedded", {}).get("attractions", [])
                 if item.get("id") and item.get("name")
             ]
@@ -595,7 +632,8 @@ def provider_status(
     enabled_provider_ids: list[str] | None = None,
     credentials: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    enabled_provider_ids = enabled_provider_ids or ["musicbrainz"]
+    if enabled_provider_ids is None:
+        enabled_provider_ids = ["musicbrainz"]
     credentials = credentials or {}
     statuses = []
     for provider in PROVIDER_CATALOG:
@@ -646,41 +684,96 @@ async def search_enabled_providers(
     genre: str | None,
     limit: int,
     offset: int = 0,
+    areas: list[str | None] | None = None,
+    genres: list[str | None] | None = None,
+    quota_session_factory: Any | None = None,
 ) -> dict[str, Any]:
-    statuses = {provider["id"]: provider for provider in provider_status(enabled_provider_ids, credentials)}
-    items: list[dict[str, Any]] = []
+    statuses = {
+        provider["id"]: provider
+        for provider in provider_status(enabled_provider_ids, credentials)
+    }
+    area_filters = areas if areas is not None else [area]
+    genre_filters = genres if genres is not None else [genre]
+
+    if quota_session_factory is None:
+        from app.database import SessionLocal
+
+        quota_session_factory = SessionLocal
+
+    from app.quotas import claim_provider_call
+
+    items_by_id: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
+
     for provider_id in enabled_provider_ids:
-        status = statuses[provider_id]
-        if not status["configured"]:
+        provider_state = statuses.get(provider_id)
+        if provider_state is None:
+            errors.append(f"Unknown provider configuration: {provider_id}")
+            continue
+        if not provider_state["configured"]:
             missing = [
-                field["key"] for field in status["fields"]
+                field["key"]
+                for field in provider_state["fields"]
                 if field["key"] not in credentials and not field.get("optional", False)
             ]
-            errors.append(f"{status['name']}: missing credentials ({', '.join(missing)})")
+            errors.append(
+                f"{provider_state['name']}: missing credentials ({', '.join(missing)})"
+            )
             continue
+
         provider_credentials = {
             field["key"]: credentials[f"{provider_id}.{field['key']}"]
-            for field in status["fields"]
+            for field in provider_state["fields"]
             if f"{provider_id}.{field['key']}" in credentials
         }
-        for provider_area in expand_area_filter(area):
-            try:
-                items.extend(await search_provider(
-                    provider_id,
-                    query=query,
-                    area=provider_area,
-                    genre=genre,
-                    limit=limit,
-                    offset=offset,
-                    credentials=provider_credentials,
-                ))
-            except (RuntimeError, ValueError, KeyError) as exc:
-                logger.warning(
-                    "Search failed for provider %s in area %r: %s",
-                    provider_id,
-                    provider_area,
-                    exc,
-                )
-                errors.append(f"{status['name']} ({provider_area or 'any area'}): {exc}")
-    return {"items": items, "count": len(items), "offset": offset, "errors": errors}
+        quota_exhausted = False
+
+        for area_filter in area_filters:
+            if quota_exhausted:
+                break
+            for genre_filter in genre_filters:
+                if quota_exhausted:
+                    break
+                for provider_area in expand_area_filter(area_filter):
+                    if not claim_provider_call(quota_session_factory, provider_id):
+                        errors.append(
+                            f"{provider_state['name']}: daily request budget exhausted; "
+                            "searches will resume after the UTC day resets"
+                        )
+                        quota_exhausted = True
+                        break
+                    try:
+                        results = await search_provider(
+                            provider_id,
+                            query=query,
+                            area=provider_area,
+                            genre=genre_filter,
+                            limit=limit,
+                            offset=offset,
+                            credentials=provider_credentials,
+                        )
+                    except (RuntimeError, ValueError, KeyError) as exc:
+                        logger.warning(
+                            "Search failed for provider %s in area %r: %s",
+                            provider_id,
+                            provider_area,
+                            exc,
+                        )
+                        errors.append(
+                            f"{provider_state['name']} ({provider_area or 'any area'}): {exc}"
+                        )
+                        continue
+
+                    for item in results:
+                        item_key = item.get("id") or (
+                            f"{item.get('provider_id', provider_id)}:"
+                            f"{item.get('external_id', item.get('name', 'unknown'))}"
+                        )
+                        items_by_id.setdefault(item_key, item)
+
+    return {
+        "items": list(items_by_id.values()),
+        "count": len(items_by_id),
+        "offset": offset,
+        "errors": errors,
+    }
