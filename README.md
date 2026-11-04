@@ -192,6 +192,7 @@ environments, and local database files are omitted.
 │   │   ├── main.py
 │   │   ├── models.py
 │   │   ├── providers.py
+│   │   ├── quotas.py
 │   │   ├── scheduler.py
 │   │   ├── schemas.py
 │   │   └── secrets.py
@@ -250,6 +251,7 @@ environments, and local database files are omitted.
 | `backend/app/main.py` | FastAPI app, lifecycle, CORS, routes, persistence actions, and error mapping |
 | `backend/app/models.py` | SQLAlchemy tables for artists, settings, credentials, and discovery candidates |
 | `backend/app/providers.py` | Provider catalog, request adapters, normalization, regional expansion, readiness, and aggregation |
+| `backend/app/quotas.py` | Persistent daily request-budget reservations for quota-limited integrations |
 | `backend/app/scheduler.py` | Periodic multi-provider searches and queue persistence |
 | `backend/app/schemas.py` | Pydantic request/response validation and field limits |
 | `backend/app/secrets.py` | Fernet key validation and credential encryption/decryption |
@@ -387,7 +389,7 @@ The CI workflow currently tests the backend with Python 3.11.
 
 ### Frontend
 
-- Node.js 20.19 or later.
+- Node.js 24.15 or later (matches the locked Vite/Vitest/jsdom toolchain).
 - npm (the lockfile should be used with `npm ci`).
 
 ### Optional services
@@ -587,8 +589,8 @@ implemented request paths. Enable them in Settings and save the provider
 selection.
 
 MusicBrainz asks clients to identify themselves and limits request frequency.
-Set a real `MUSICBRAINZ_CONTACT` URL or email before deployment. The local
-default is not an operator contact.
+The example value points to this repository's issue tracker. Replace it with a
+maintainer-owned contact URL or email before public deployment.
 
 ### Credentialed provider setup
 
@@ -1255,7 +1257,10 @@ corrupted encrypted data explicitly.
 | `DATABASE_URL` | SQLite file in `backend/data/` | SQLAlchemy database connection |
 | `CORS_ORIGINS` | localhost Vite origins | Comma-separated browser origins accepted by the API |
 | `LOG_LEVEL` | `INFO` | Python logging level passed to `logging.basicConfig` |
-| `MUSICBRAINZ_CONTACT` | local Vite URL | Contact hint included in MusicBrainz User-Agent |
+| `MUSICBRAINZ_CONTACT` | Repository issue tracker example | Contact hint included in the MusicBrainz User-Agent; replace with a maintained contact |
+| `YOUTUBE_SEARCH_DAILY_BUDGET` | `80` | Persistent YouTube search.list request budget per UTC day |
+| `MAX_PROVIDER_CALLS_PER_SEARCH` | `100` | Maximum estimated upstream calls accepted by one manual search |
+| `MAX_SCHEDULED_PROVIDER_CALLS_PER_CYCLE` | `100` | Maximum provider calls in one scheduled discovery cycle |
 | `PROVIDER_SECRETS_KEY` | unset | Fernet key required to store/decrypt provider credentials |
 | `API_PROXY_TARGET` | `http://127.0.0.1:8000` | Vite proxy target for `/api` |
 
@@ -1333,9 +1338,11 @@ make test PYTHON=/path/to/python
 
 `.github/workflows/ci.yml` runs two independent jobs:
 
-1. Install Python dependencies and execute backend pytest on Python 3.11.
-2. Install Node 20.19 dependencies with `npm ci`, run Vitest, and build the
+1. Install Python dependencies and execute backend pytest on Python 3.13.
+2. Install Node 24.15 dependencies with `npm ci`, run Vitest, and build the
    frontend.
+3. When both test jobs pass, assemble the source plus production frontend and
+   publish `ARTIST_BREAK_APP.zip` as a workflow artifact.
 
 The pre-commit configuration includes whitespace and YAML/JSON checks, Ruff,
 ESLint, Prettier, and Gitleaks. Those hooks are optional until pre-commit is
@@ -1438,10 +1445,14 @@ Check official references in Settings and
 
 ### Quotas and scheduler fan-out
 
-The scheduler does not maintain provider-specific quota ledgers or shared
-distributed rate limits. Every configured region/genre combination can cause a
-request to every enabled provider. Do not start with the maximum configuration
-on quota-limited APIs.
+The scheduler now maintains a persistent daily request ledger for YouTube
+search.list calls, with a conservative default budget of 80 per UTC day. Manual
+searches are capped at an estimated 100 upstream calls, and scheduled cycles
+default to 100 provider requests. These controls prevent unbounded fan-out, but
+they are not a substitute for verifying each provider's own quota, contract,
+and commercial-use terms. The scheduler and MusicBrainz rate limiter remain
+single-process components; multi-worker deployment still needs a dedicated
+worker and distributed rate coordination.
 
 ### Catalog identity matching
 
