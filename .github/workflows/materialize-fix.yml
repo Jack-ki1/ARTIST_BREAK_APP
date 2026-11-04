@@ -1,0 +1,28 @@
+name: Apply focused v3.1 frontend fix
+on:
+  push:
+    branches:
+      - automation/v3.1-reference-refresh-20261104
+permissions:
+  contents: write
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Apply fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .release/fix.patch.xz.b64 | xz -t
+          base64 -d .release/fix.patch.xz.b64 | xz -dc | git apply --check
+          base64 -d .release/fix.patch.xz.b64 | xz -dc | git apply
+          rm -rf .release
+          rm -f .github/workflows/materialize-fix.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix Settings worker status prop wiring'
+          git push origin HEAD:${GITHUB_REF_NAME}
