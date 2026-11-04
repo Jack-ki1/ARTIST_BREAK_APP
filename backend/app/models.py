@@ -113,6 +113,7 @@ class ArtistCandidate(Base):
     source_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     external_id: Mapped[str] = mapped_column(String(240), nullable=False)
     name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    normalized_name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
     country: Mapped[str | None] = mapped_column(String(80))
     city: Mapped[str | None] = mapped_column(String(120))
     genres: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
