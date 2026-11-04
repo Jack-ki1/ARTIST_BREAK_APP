@@ -1,977 +1,543 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  createArtist,
-  deleteArtist,
-  getDiscoveryQueue,
-  getDiscoverySettings,
-  getArtists,
-  getHealth,
-  getProviders,
-  reviewDiscoveryCandidate,
-  saveProviderSettings,
-  saveDiscoverySettings,
-  searchArtists,
+  getHealth, getDashboard, getSources, saveSources, getSettings, saveSettings,
+  getCandidates, runDiscovery, reviewCandidate, getArtists, getArtist,
+  collectEvidence, saveReview, saveDecision, getRecommendations, getRuns,
 } from "./api.js";
 
-const PAGE_SIZE = 50;
-const PREFERENCE_KEY = "breakout-radar-discovery-preferences";
-const DEFAULT_PREFERENCES = { area: "", genre: "", limit: 10, enabled: true };
-
-function preferencesFromSettings(settings) {
-  return {
-    area: settings.areas.join(", "),
-    genre: settings.genres.join(", "),
-    limit: settings.result_limit,
-    enabled: settings.enabled,
-  };
-}
-
-function filterValues(value) {
-  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
-}
-
-const NAV_ITEMS = [
-  { id: "discovery", label: "Discovery", icon: "compass" },
-  { id: "analyze", label: "Analyze", icon: "chart" },
-  { id: "recommend", label: "Recommend", icon: "spark" },
-  { id: "settings", label: "Settings", icon: "settings" },
+const NAV = [
+  { id: "discovery", label: "Discovery", short: "Find emerging artists", icon: "radar" },
+  { id: "analyse", label: "Analyse", short: "Understand the evidence", icon: "wave" },
+  { id: "recommendations", label: "Recommendations", short: "Make A&R decisions", icon: "trophy" },
+  { id: "settings", label: "Settings", short: "Configure the intelligence", icon: "sliders" },
 ];
 
-const PAGE_CONTENT = {
-  discovery: {
-    kicker: "ARTIST INTELLIGENCE",
-    title: "Discovery",
-    description: "Build a trusted artist directory. No generated profiles or estimates.",
-  },
-  analyze: {
-    kicker: "EVIDENCE REVIEW",
-    title: "Analyze",
-    description: "Review source-backed artist evidence when authorized data becomes available.",
-  },
-  recommend: {
-    kicker: "HUMAN DECISIONS",
-    title: "Recommend",
-    description: "Recommendations stay unavailable until real, permissioned evidence is connected.",
-  },
-  settings: {
-    kicker: "WORKSPACE CONTROL",
-    title: "Settings",
-    description: "Review service status, connected sources, and the workspace's data boundaries.",
-  },
+const DEFAULT_WEIGHTS = {
+  discovery_weights: { momentum: 30, independent_breadth: 25, release_activity: 15, live_activity: 10, search_interest: 10, catalogue_headroom: 10 },
+  artistic_weights: { songwriting: 2, vocals: 2, melody: 1.5, production: 1, originality: 1.5, performance: 1, identity: 1 },
 };
 
+const SCORE_LABELS = [
+  ["songwriting", "Songwriting", "Hooks, structure, lyric craft and emotional clarity"],
+  ["vocals", "Vocals", "Tone, range, control, delivery and character"],
+  ["melody", "Melody", "Memorability, phrasing, harmony and melodic identity"],
+  ["production", "Production", "Arrangement, sound design, mix and technical execution"],
+  ["originality", "Originality", "Distinctiveness, risk-taking and artistic point of view"],
+  ["performance", "Performance", "Stage potential, energy and audience connection"],
+  ["identity", "Artist identity", "Coherent creative world, positioning and visual language"],
+];
+
+const money = (value) => new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value || 0));
+const dateLabel = (value) => {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+};
+const timeAgo = (value) => {
+  if (!value) return "No activity yet";
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return "Just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+};
+const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, Number(value) || 0));
+
 function Icon({ name, size = 18 }) {
-  const common = {
-    width: size,
-    height: size,
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.7,
-    strokeLinecap: "round",
-    strokeLinejoin: "round",
-    "aria-hidden": true,
+  const paths = {
+    radar: <><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12l6-4M3 12h9"/></>,
+    wave: <><path d="M2 12h3l3-8 4 16 4-12 3 4h3"/></>,
+    trophy: <><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"/></>,
+    sliders: <><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M2 14h4M10 8h4M18 16h4"/></>,
+    search: <><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></>,
+    plus: <><path d="M12 5v14M5 12h14"/></>,
+    arrow: <><path d="M5 12h14M13 6l6 6-6 6"/></>,
+    refresh: <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 9A7 7 0 0 1 18.4 7L20 12M4 12l1.6 5a7 7 0 0 0 12.3-2"/></>,
+    check: <path d="m5 12 4 4L19 6"/>,
+    x: <path d="m6 6 12 12M18 6 6 18"/>,
+    globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></>,
+    music: <><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></>,
+    chart: <><path d="M4 19V5M4 19h17"/><path d="m7 15 4-4 3 2 5-7"/></>,
+    users: <><circle cx="9" cy="8" r="3"/><path d="M2 20a7 7 0 0 1 14 0M17 5a3 3 0 0 1 0 6M18 14a6 6 0 0 1 4 6"/></>,
+    pulse: <><path d="M2 12h4l3-8 5 16 3-8h5"/></>,
+    external: <><path d="M14 3h7v7M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></>,
+    chevron: <path d="m7 10 5 5 5-5"/>,
+    filter: <><path d="M4 5h16l-6 7v6l-4 2v-8L4 5Z"/></>,
+    shield: <><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z"/><path d="m9 12 2 2 4-4"/></>,
+    bolt: <path d="m13 2-3 9h7l-5 11 1-9H6l7-11Z"/>,
+    database: <><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></>,
+    menu: <><path d="M4 6h16M4 12h16M4 18h16"/></>,
+    sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></>,
+    moon: <path d="M20.8 14A8.5 8.5 0 0 1 10 3.2 8.8 8.8 0 1 0 20.8 14Z"/>,
+    pin: <><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.4"/></>,
+    note: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></>,
+    lock: <><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/></>,
+    star: <path d="m12 2 3 6.5 7 .8-5.2 4.8 1.4 7L12 17.5l-6.2 3.6 1.4-7L2 9.3l7-.8L12 2Z"/>,
   };
-  const shapes = {
-    compass: <><circle cx="12" cy="12" r="9" /><path d="m15.8 8.2-2.5 5.1-5.1 2.5 2.5-5.1 5.1-2.5Z" /></>,
-    chart: <><path d="M4 19V5" /><path d="M4 19h16" /><path d="m7 15 4-4 3 2 5-6" /><path d="M16 7h3v3" /></>,
-    spark: <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" /></>,
-    settings: <><circle cx="12" cy="12" r="3" /><path d="m19.4 15 .1.1 1.3 1-1.4 2.4-1.5-.6a8 8 0 0 1-1.7 1l-.2 1.6h-2.8L13 19a8 8 0 0 1-2-.5l-1.4.9-2-2 1-1.3a8 8 0 0 1-.7-1.8l-1.6-.4V11l1.5-.4a8 8 0 0 1 .8-1.8l-.9-1.4 2-2 1.3.9a8 8 0 0 1 1.9-.6l.4-1.6h2.8l.4 1.6a8 8 0 0 1 1.8.8l1.4-.9 2 2-.9 1.4a8 8 0 0 1 .6 1.9l1.6.4v2.8l-1.6.4a8 8 0 0 1-.6 1.5Z" transform="translate(-1 -1) scale(.92)" /></>,
-    search: <><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 4.5 4.5" /></>,
-    plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
-    arrow: <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
-    music: <><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></>,
-    people: <><circle cx="9" cy="8" r="3" /><path d="M3 20v-1a6 6 0 0 1 12 0v1" /><path d="M17 5a3 3 0 0 1 0 6" /><path d="M21 20v-1a6 6 0 0 0-3.5-5.5" /></>,
-    shield: <><path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6l8-3Z" /><path d="m9 12 2 2 4-4" /></>,
-    database: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12v7c0 1.7 3.6 3 8 3" /><path d="M20 12v3" /></>,
-  };
-  return <svg {...common}>{shapes[name] || shapes.spark}</svg>;
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.star}</svg>;
 }
 
-function ArtistForm({ onCreated, onCancel }) {
-  const [values, setValues] = useState({
-    name: "",
-    country: "",
-    city: "",
-    genre: "",
-    source_name: "",
-    source_url: "",
-  });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+function Badge({ children, tone = "neutral" }) {
+  return <span className={`badge badge-${tone}`}>{children}</span>;
+}
+function Panel({ title, sub, action, children, className = "" }) {
+  return <section className={`panel ${className}`}>
+    {(title || action) && <header className="panel-head"><div>{title && <h2>{title}</h2>}{sub && <p>{sub}</p>}</div>{action}</header>}
+    {children}
+  </section>;
+}
+function Kpi({ icon, value, label, delta, tone = "lime" }) {
+  return <div className="kpi-card">
+    <div className={`kpi-icon tone-${tone}`}><Icon name={icon}/></div>
+    <div className="kpi-value">{value}</div>
+    <div className="kpi-label">{label}</div>
+    {delta && <div className="kpi-delta">{delta}</div>}
+  </div>;
+}
+function Score({ value, label, tone = "lime" }) {
+  const score = value == null ? null : clamp(value);
+  return <div className={`score-ring score-${tone}`} style={{ "--score": score || 0 }}>
+    <span>{score == null ? "—" : Math.round(score)}</span>
+    {label && <small>{label}</small>}
+  </div>;
+}
+function Empty({ title, body, action }) {
+  return <div className="empty-state"><div className="empty-mark"><Icon name="radar" size={23}/></div><strong>{title}</strong><p>{body}</p>{action}</div>;
+}
+function Notice({ tone = "info", children }) {
+  return <div className={`notice notice-${tone}`}>{children}</div>;
+}
+function SourceDots({ ids = [] }) {
+  return <div className="source-dots">{ids.slice(0, 5).map((id) => <span title={id} key={id}>{id.slice(0, 2).toUpperCase()}</span>)}{ids.length > 5 && <em>+{ids.length - 5}</em>}</div>;
+}
+function Progress({ value }) {
+  return <div className="progress-track"><span style={{ width: `${clamp(value)}%` }}/></div>;
+}
+function fmtMetric(value, metric = "") {
+  if (value == null) return "—";
+  return `${money(value)}${metric.includes("growth") ? "%" : ""}`;
+}
+function candidateSources(item, sources) {
+  return (item.source_ids || []).map((id) => sources.find((source) => source.id === id)?.name || id);
+}
 
-  const update = (event) => {
-    setValues((current) => ({ ...current, [event.target.name]: event.target.value }));
-  };
+function DiscoverySection({ dashboard, candidates, artists, sources, loading, running, filters, setFilters, onRun, onReview, selectedArtist, setSelectedArtist }) {
+  const [artistQuery, setArtistQuery] = useState("");
+  const ready = dashboard?.overview?.sources_ready || 0;
+  const totals = dashboard?.overview || {};
+  const filteredArtists = artists.filter((artist) => !artistQuery || artist.name.toLowerCase().includes(artistQuery.toLowerCase()));
+  const run = dashboard?.recent_runs?.[0];
+  return <div className="page-stack">
+    <section className="hero-panel">
+      <div className="hero-copy">
+        <div className="eyebrow"><span className="live-pulse"/> A&R INTELLIGENCE / AFRICA-FIRST</div>
+        <h1>Find the next <span>movement.</span></h1>
+        <p>Surface independent artists early, corroborate identities across sources, and understand the evidence behind their momentum.</p>
+        <div className="hero-meta"><span><Icon name="globe" size={14}/> Africa-wide discovery</span><span><Icon name="database" size={14}/> {ready} ready data sources</span><span><Icon name="shield" size={14}/> Evidence-first ranking</span></div>
+      </div>
+      <div className="hero-orbit">
+        <div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="orbit-core"><Icon name="radar" size={42}/><small>RADAR<br/>ACTIVE</small></div>
+        <span className="orbit-node node-a"/><span className="orbit-node node-b"/><span className="orbit-node node-c"/>
+      </div>
+    </section>
 
-  const submit = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    setError("");
-    try {
-      const artist = await createArtist(
-        Object.fromEntries(
-          Object.entries(values).map(([key, value]) => [key, value.trim() || null]),
-        ),
-      );
-      setValues({ name: "", country: "", city: "", genre: "", source_name: "", source_url: "" });
-      onCreated(artist);
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setSaving(false);
+    <div className="kpi-grid">
+      <Kpi icon="users" value={money(totals.artists_tracked)} label="Artists in the directory" tone="lime"/>
+      <Kpi icon="radar" value={money(totals.pending_candidates)} label="Emerging candidates" tone="cyan"/>
+      <Kpi icon="wave" value={money(totals.artistic_reviews)} label="Artistic reviews completed" tone="violet"/>
+      <Kpi icon="database" value={`${ready}/${totals.sources_total || sources.length || 73}`} label="Sources ready to query" tone="amber"/>
+    </div>
+
+    <Panel title="Run a discovery scan" sub="Search configured catalogues in parallel. Source-specific limits and permissions are respected." className="scan-panel">
+      <div className="scan-controls">
+        <label className="field field-grow"><span>Artist, scene or discovery query</span><div className="input-icon"><Icon name="search" size={16}/><input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="e.g. Nairobi alternative R&B, new Bongo Flava…"/></div></label>
+        <label className="field"><span>Country / market</span><select value={filters.country} onChange={(event) => setFilters({ ...filters, country: event.target.value })}><option value="">All markets</option>{["Kenya","Tanzania","Uganda","Rwanda","Nigeria","Ghana","South Africa","Zambia","Ethiopia","Senegal","Côte d’Ivoire","Cameroon"].map((country) => <option key={country}>{country}</option>)}</select></label>
+        <label className="field"><span>Genre</span><input value={filters.genre} onChange={(event) => setFilters({ ...filters, genre: event.target.value })} placeholder="Afrobeats, Gengetone…"/></label>
+        <button className="btn btn-primary scan-button" onClick={onRun} disabled={running}><Icon name="bolt" size={17}/>{running ? "Scanning sources…" : "Run discovery"}</button>
+      </div>
+      <div className="scan-foot"><span><Icon name="shield" size={13}/> Search fan-out is capped; results are queued for human review.</span><span>{run ? `Last run ${timeAgo(run.started_at)}` : "No discovery run recorded yet"}</span></div>
+      {running && <div className="scan-loading"><span/><span/><span/><span/><span/><small>Querying selected source adapters</small></div>}
+    </Panel>
+
+    <div className="content-grid discovery-grid">
+      <Panel title="Emerging artist candidates" sub={`${candidates.length} grouped identities awaiting your review`} action={<Badge tone="cyan">REVIEW QUEUE</Badge>}>
+        {loading ? <div className="skeleton-list"><span/><span/><span/></div> : candidates.length === 0 ? <Empty title="Your discovery queue is clear" body="Run a scan to find emerging artists. New identities are held here until your team accepts them."/> :
+          <div className="candidate-list">{candidates.map((item) => <article className="candidate-row" key={item.group_key}>
+            <div className="artist-avatar">{item.image_url ? <img src={item.image_url} alt=""/> : <span>{item.name.slice(0,2).toUpperCase()}</span>}</div>
+            <div className="candidate-main"><div className="candidate-title">{item.name}<Badge tone={item.source_count > 1 ? "success" : "neutral"}>{item.source_count} source{item.source_count === 1 ? "" : "s"}</Badge></div>
+              <div className="candidate-sub">{[item.city, item.country, ...(item.genres || []).slice(0,2)].filter(Boolean).join(" · ") || "Location / genre not yet verified"}</div>
+              <div className="candidate-signals"><SourceDots ids={item.source_ids}/><span>{item.signal_summary?.[0] || "Source-backed identity match"}</span></div>
+            </div>
+            <div className="candidate-score"><Score value={item.discovery_score} label="INDEX"/><small>{item.confidence}% confidence</small></div>
+            <div className="candidate-actions"><button className="btn btn-soft" onClick={() => onReview(item, "accept")}>Accept</button><button className="icon-btn" aria-label={`Dismiss ${item.name}`} onClick={() => onReview(item, "dismiss")}><Icon name="x"/></button></div>
+          </article>)}</div>}
+      </Panel>
+
+      <Panel title="Discovery activity" sub="Latest collection runs and provider responses">
+        {(dashboard?.recent_runs || []).length === 0 ? <Empty title="No activity yet" body="Your first source scan will appear here."/> :
+          <div className="activity-list">{dashboard.recent_runs.slice(0,6).map((run) => <div className="activity-row" key={run.id}>
+            <div className={`activity-icon ${run.status === "completed" ? "activity-success" : "activity-warn"}`}><Icon name={run.status === "completed" ? "check" : "pulse"} size={15}/></div>
+            <div className="activity-copy"><strong>{run.query || "Scheduled discovery"}</strong><span>{run.candidates_found} candidates · {run.sources_attempted?.length || 0} sources · {timeAgo(run.started_at)}</span></div>
+            <Badge tone={run.status === "completed" ? "success" : "warning"}>{run.status}</Badge>
+          </div>)}</div>}
+        <div className="source-readiness"><div><span>Source readiness</span><strong>{ready} / {sources.length || 73}</strong></div><Progress value={sources.length ? ready / sources.length * 100 : 0}/><small>Public, credentialed and approved integrations are shown separately.</small></div>
+      </Panel>
+    </div>
+
+    <Panel title="Artist directory" sub="Accepted artists, ordered by the latest evidence-backed index." action={<div className="table-tools"><div className="input-icon compact"><Icon name="search" size={14}/><input value={artistQuery} onChange={(event) => setArtistQuery(event.target.value)} placeholder="Filter artists…"/></div><span>{filteredArtists.length} / {artists.length}</span></div>}>
+      {filteredArtists.length === 0 ? <Empty title="No accepted artists yet" body="Accept a candidate from the discovery queue to create the artist's permanent profile."/> :
+        <div className="table-wrap"><table className="data-table"><thead><tr><th>ARTIST</th><th>MARKET</th><th>GENRES</th><th>DISCOVERY</th><th>ARTISTIC</th><th>STAGE</th><th/></tr></thead><tbody>
+          {filteredArtists.map((artist) => <tr key={artist.id} onClick={() => setSelectedArtist(artist.id)} className={selectedArtist === artist.id ? "row-selected" : ""}>
+            <td><div className="table-artist"><div className="mini-avatar">{artist.image_url ? <img src={artist.image_url} alt=""/> : artist.name.slice(0,2).toUpperCase()}</div><div><strong>{artist.name}</strong><small>{artist.primary_source || "Manual profile"}</small></div></div></td>
+            <td>{artist.country || "Unverified"}</td><td>{(artist.genres || []).slice(0,2).join(", ") || "—"}</td>
+            <td><span className="score-text">{artist.discovery_score == null ? "—" : Math.round(artist.discovery_score)}</span><small className="muted-inline">{Math.round(artist.discovery_confidence || 0)}% coverage</small></td>
+            <td>{artist.artistic_score == null ? <Badge>Not reviewed</Badge> : Math.round(artist.artistic_score)}</td>
+            <td><Badge tone={artist.recommendation_tier === "pursue" ? "success" : artist.recommendation_tier === "meet" ? "cyan" : "neutral"}>{artist.recommendation_tier || "hold"}</Badge></td>
+            <td><button className="icon-btn" aria-label={`Open ${artist.name}`} onClick={(event) => { event.stopPropagation(); setSelectedArtist(artist.id); }}><Icon name="arrow" size={16}/></button></td>
+          </tr>)}
+        </tbody></table></div>}
+    </Panel>
+  </div>;
+}
+
+function AnalyseSection({ artists, selectedArtist, setSelectedArtist, artistDetail, reloadDetail, busy, notify }) {
+  const [scores, setScores] = useState(Object.fromEntries(SCORE_LABELS.map(([key]) => [key, 5])));
+  const [reviewer, setReviewer] = useState("A&R Team");
+  const [trackTitle, setTrackTitle] = useState("");
+  const [trackUrl, setTrackUrl] = useState("");
+  const [notes, setNotes] = useState("");
+  const [strengths, setStrengths] = useState("");
+  const [risks, setRisks] = useState("");
+  const [collecting, setCollecting] = useState(false);
+  useEffect(() => {
+    if (artistDetail?.reviews?.length) {
+      const review = artistDetail.reviews[0];
+      setScores({ ...Object.fromEntries(SCORE_LABELS.map(([key]) => [key, 5])), ...(review.scores || {}) });
+      setTrackTitle(review.track_title || "");
+      setTrackUrl(review.track_url || "");
+      setNotes(review.notes || "");
+      setStrengths((review.strengths || []).join("\n"));
+      setRisks((review.risks || []).join("\n"));
+    } else {
+      setScores(Object.fromEntries(SCORE_LABELS.map(([key]) => [key, 5])));
+      setTrackTitle(""); setTrackUrl(""); setNotes(""); setStrengths(""); setRisks("");
     }
+  }, [artistDetail?.id]);
+  const selected = artistDetail;
+  const observations = selected?.observations || [];
+  const latestMetrics = useMemo(() => {
+    const map = new Map();
+    observations.forEach((item) => {
+      const key = `${item.source_id}:${item.metric}`;
+      if (!map.has(key) || new Date(item.observed_at) > new Date(map.get(key).observed_at)) map.set(key, item);
+    });
+    return [...map.values()];
+  }, [observations]);
+  const save = async () => {
+    if (!selectedArtist) return notify("Choose an artist before saving a review.", "warning");
+    const payload = {
+      reviewer, track_title: trackTitle || null, track_url: trackUrl || null,
+      scores, verdict: "promising", notes,
+      strengths: strengths.split("\n").map((x) => x.trim()).filter(Boolean),
+      risks: risks.split("\n").map((x) => x.trim()).filter(Boolean),
+      evidence: (selected?.evidence || []).slice(0, 12).map((item) => ({ source_id: item.source_id, title: item.title, url: item.url })),
+    };
+    const result = await saveReview(selectedArtist, payload);
+    notify(`Artistic review saved · ${result.overall}/100`, "success");
+    await reloadDetail();
   };
-
-  return (
-    <form className="artist-form panel" onSubmit={submit}>
-      <div className="form-heading">
-        <div>
-          <p className="eyebrow">ARTIST IDENTITY</p>
-          <h2>Add to your directory</h2>
+  const collect = async () => {
+    if (!selectedArtist) return;
+    setCollecting(true);
+    try {
+      const result = await collectEvidence(selectedArtist);
+      notify(`${result.evidence_saved} new evidence items collected`, "success");
+      await reloadDetail();
+    } catch (error) { notify(error.message, "error"); }
+    finally { setCollecting(false); }
+  };
+  return <div className="page-stack">
+    <section className="section-heading"><div><div className="eyebrow">ARTIST INTELLIGENCE / EVIDENCE REVIEW</div><h1>Understand the <span>whole artist.</span></h1><p>Keep platform facts separate. Evaluate the music with structured human judgement, then make decisions with the complete picture.</p></div>
+      <div className="select-wrap"><label>Artist profile</label><select value={selectedArtist || ""} onChange={(event) => setSelectedArtist(event.target.value)}><option value="">Select an artist…</option>{artists.map((artist) => <option key={artist.id} value={artist.id}>{artist.name}</option>)}</select></div>
+    </section>
+    {!selected ? <Empty title="Select an artist to analyse" body="Choose an artist from your directory to see their source identities, observations, press/community evidence and artistic review."/> :
+      <>
+        <div className="artist-profile-strip">
+          <div className="artist-profile-avatar">{selected.image_url ? <img src={selected.image_url} alt=""/> : selected.name.slice(0,2).toUpperCase()}</div>
+          <div className="artist-profile-copy"><div className="eyebrow">{selected.country || "COUNTRY UNVERIFIED"}{selected.city ? ` · ${selected.city}` : ""}</div><h2>{selected.name}</h2><p>{(selected.genres || []).join(" · ") || "Genre not yet classified"}</p><div className="profile-chips"><Badge tone="cyan">{selected.identities?.length || 0} source identities</Badge><Badge tone="success">{observations.length} observations</Badge><Badge>{selected.evidence?.length || 0} evidence items</Badge></div></div>
+          <div className="profile-scores"><Score value={selected.discovery_score} label="DISCOVERY" tone="cyan"/><Score value={selected.artistic_score} label="ARTISTIC" tone="violet"/><Score value={selected.combined_score} label="COMBINED" tone="lime"/></div>
         </div>
-        <span className="form-tag">Identity only · no audience metrics</span>
-      </div>
-      <label>
-        Artist or act name <span aria-hidden="true">*</span>
-        <input autoComplete="off" maxLength={120} name="name" onChange={update} placeholder="Enter an artist name" required value={values.name} />
-      </label>
-      <div className="form-grid">
-        <label>Country or territory<input maxLength={120} name="country" onChange={update} value={values.country} /></label>
-        <label>City<input maxLength={120} name="city" onChange={update} value={values.city} /></label>
-        <label>Genre<input maxLength={120} name="genre" onChange={update} value={values.genre} /></label>
-        <label>Source or permission reference<input maxLength={120} name="source_name" onChange={update} value={values.source_name} /></label>
-      </div>
-      <label>
-        Source URL
-        <input maxLength={2048} name="source_url" onChange={update} placeholder="https://…" type="url" value={values.source_url} />
-      </label>
-      {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="form-actions">
-        <p>Only enter information you are authorized to store.</p>
-        <div className="form-action-buttons">
-          <button className="button button-secondary" disabled={saving} onClick={onCancel} type="button">Cancel</button>
-          <button className="button button-primary" disabled={saving} type="submit">{saving ? "Saving…" : "Save artist"}</button>
+        <div className="content-grid analyse-grid">
+          <Panel title="Observed platform signals" sub="Latest values are source-attributed, not added into one synthetic audience count." action={<Badge tone="cyan">TIME-STAMPED</Badge>}>
+            {latestMetrics.length === 0 ? <Empty title="No numeric observations yet" body="Discovery only stores metrics returned by an authorised source. Connect a source that provides permitted public or owner-authorised counts."/> :
+              <div className="metric-grid">{latestMetrics.map((item) => <div className="metric-card" key={item.id}><span>{item.metric.replaceAll("_"," ")}</span><strong>{fmtMetric(item.value, item.metric)}</strong><small>{item.source_id} · {dateLabel(item.observed_at)}</small></div>)}</div>}
+            <div className="source-observation-list">{selected.identities?.map((identity) => <div key={identity.id} className="source-identity-row"><span className="source-favicon">{identity.source_id.slice(0,2).toUpperCase()}</span><div><strong>{identity.source_id}</strong><small>{identity.external_id} · {identity.verified ? "verified" : "unverified match"}</small></div><a href={identity.source_url} target="_blank" rel="noreferrer"><Icon name="external" size={14}/></a></div>)}</div>
+          </Panel>
+          <Panel title="Evidence library" sub="Links that help explain activity around the artist." action={<button className="btn btn-soft btn-small" onClick={collect} disabled={collecting}><Icon name="refresh" size={14}/>{collecting ? "Collecting…" : "Collect evidence"}</button>}>
+            {selected.evidence?.length ? <div className="evidence-list">{selected.evidence.slice(0,12).map((item) => <a className="evidence-item" href={item.url} target="_blank" rel="noreferrer" key={item.id}><div className="evidence-type">{(item.evidence_type || "source").slice(0,3).toUpperCase()}</div><div><strong>{item.title}</strong><span>{item.source_id} · {dateLabel(item.published_at || item.collected_at)}</span>{item.summary && <p>{item.summary}</p>}</div><Icon name="external" size={14}/></a>)}</div> : <Empty title="No evidence collected" body="Enable GDELT, Reddit or licensed/public evidence sources in Settings, then collect source-linked items here."/>}
+          </Panel>
         </div>
-      </div>
-    </form>
-  );
+        <Panel title="Artistic review" sub="A structured A&R scorecard. Scores are entered by a reviewer; this form does not invent an AI listening result." action={<Badge tone="violet">{selected.reviews?.length ? `${selected.reviews.length} reviews` : "HUMAN-LED REVIEW"}</Badge>}>
+          <Notice tone="info">AI audio scoring is intentionally not represented as live until an audio-capable model and permitted track input are configured. Your team can complete this professional rubric now.</Notice>
+          <div className="review-layout">
+            <div className="review-score-fields">{SCORE_LABELS.map(([key, label, hint]) => <div className="review-score-row" key={key}><div className="review-score-label"><strong>{label}</strong><small>{hint}</small></div><input type="range" min="0" max="10" step="0.5" value={scores[key] ?? 5} onChange={(event) => setScores({ ...scores, [key]: Number(event.target.value) })}/><b>{Number(scores[key] ?? 5).toFixed(1)}</b></div>)}</div>
+            <div className="review-input-fields">
+              <label className="field"><span>Reviewer</span><input value={reviewer} onChange={(event) => setReviewer(event.target.value)}/></label>
+              <label className="field"><span>Track reviewed (optional)</span><input value={trackTitle} onChange={(event) => setTrackTitle(event.target.value)} placeholder="Track title"/></label>
+              <label className="field"><span>Track URL (optional)</span><input value={trackUrl} onChange={(event) => setTrackUrl(event.target.value)} placeholder="https://…"/></label>
+              <label className="field"><span>Review notes</span><textarea rows="4" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Describe what works, what needs development and what you would want to hear next…"/></label>
+              <div className="review-two-col"><label className="field"><span>Strengths · one per line</span><textarea rows="3" value={strengths} onChange={(event) => setStrengths(event.target.value)} placeholder="Distinctive vocal tone&#10;Memorable hook"/></label><label className="field"><span>Risks · one per line</span><textarea rows="3" value={risks} onChange={(event) => setRisks(event.target.value)} placeholder="Needs live assessment&#10;Inconsistent release cadence"/></label></div>
+              <div className="review-footer"><div><span>Weighted artistic score</span><strong>{Math.round(SCORE_LABELS.reduce((sum, [key]) => sum + (Number(scores[key]) * 10), 0) / SCORE_LABELS.length)}</strong><small>/100 · review weights are configurable in Settings</small></div><button className="btn btn-primary" onClick={save} disabled={busy}>Save artistic review <Icon name="arrow" size={15}/></button></div>
+            </div>
+          </div>
+        </Panel>
+      </>}
+  </div>;
 }
 
-function SectionHeading({ kicker, title, description, action }) {
-  return (
-    <div className="section-heading">
-      <div>
-        <p className="eyebrow">{kicker}</p>
-        <h2>{title}</h2>
-        {description && <p className="section-description">{description}</p>}
-      </div>
-      {action}
+function RecommendationsSection({ recommendations, reload, notify }) {
+  const [notes, setNotes] = useState({});
+  const [saving, setSaving] = useState("");
+  const grouped = useMemo(() => {
+    const groups = { pursue: [], meet: [], watch: [], hold: [] };
+    recommendations.forEach((item) => groups[item.recommendation?.tier || "hold"].push(item));
+    return groups;
+  }, [recommendations]);
+  const decisions = [
+    { id: "pursue", label: "Pursue", tone: "success" },
+    { id: "meet", label: "Meet", tone: "cyan" },
+    { id: "watch", label: "Watch", tone: "warning" },
+    { id: "hold", label: "Hold", tone: "neutral" },
+  ];
+  const choose = async (artist, decision) => {
+    setSaving(artist.id);
+    try {
+      await saveDecision(artist.id, { decision, owner: "A&R Team", note: notes[artist.id] || "" });
+      notify(`${artist.name}: ${decision} decision recorded`, "success");
+      await reload();
+    } catch (error) { notify(error.message, "error"); }
+    finally { setSaving(""); }
+  };
+  return <div className="page-stack">
+    <section className="section-heading"><div><div className="eyebrow">A&R WORKBENCH / DECISION SUPPORT</div><h1>Turn signals into <span>decisions.</span></h1><p>Recommendations combine discovery momentum with artistic quality. An artist cannot reach “Pursue” without a completed artistic review.</p></div><button className="btn btn-soft" onClick={reload}><Icon name="refresh" size={15}/> Refresh recommendations</button></section>
+    <div className="tier-overview">{[
+      ["pursue","Pursue","Highest combined evidence","success"],["meet","Meet","Worth a conversation","cyan"],["watch","Watch","Needs more evidence","warning"],["hold","Hold","Awaiting review or signal","neutral"],
+    ].map(([id,label,sub,tone]) => <div className={`tier-card tier-${tone}`} key={id}><span>{label.toUpperCase()}</span><strong>{grouped[id].length}</strong><small>{sub}</small></div>)}</div>
+    <Notice tone="info">A 0–100 score is a transparent ranking index, not a probability of commercial success. Missing data lowers confidence and incomplete artistic reviews remain on Hold.</Notice>
+    {recommendations.length === 0 ? <Empty title="No artist decisions to recommend yet" body="Accept artists from Discovery, then complete an artistic review in Analyse to activate the recommendation workflow."/> :
+      <div className="recommendation-list">{recommendations.map((artist) => <article className="recommendation-card" key={artist.id}>
+        <div className="recommendation-top"><div className="table-artist"><div className="mini-avatar">{artist.image_url ? <img src={artist.image_url} alt=""/> : artist.name.slice(0,2).toUpperCase()}</div><div><strong>{artist.name}</strong><small>{[artist.country, ...(artist.genres || []).slice(0,2)].filter(Boolean).join(" · ")}</small></div></div>
+          <div className="recommendation-scores"><div><b>{artist.discovery_score == null ? "—" : Math.round(artist.discovery_score)}</b><small>DISCOVERY</small></div><div><b>{artist.artistic_score == null ? "—" : Math.round(artist.artistic_score)}</b><small>ARTISTIC</small></div><Score value={artist.recommendation?.score} label="TOTAL"/></div>
+          <Badge tone={artist.recommendation?.tier === "pursue" ? "success" : artist.recommendation?.tier === "meet" ? "cyan" : artist.recommendation?.tier === "watch" ? "warning" : "neutral"}>{artist.recommendation?.tier || "hold"}</Badge>
+        </div>
+        <p className="recommendation-reason">{artist.recommendation?.reason}</p>
+        <div className="recommendation-bottom"><label className="field note-field"><span>Decision note</span><input value={notes[artist.id] ?? ""} onChange={(event) => setNotes({ ...notes, [artist.id]: event.target.value })} placeholder="Rationale, next action or follow-up date…"/></label>
+          <div className="decision-buttons">{decisions.map((option) => <button key={option.id} disabled={saving === artist.id} className={`btn btn-decision decision-${option.tone}`} onClick={() => choose(artist, option.id)}>{option.label}</button>)}</div>
+        </div>
+      </article>)}</div>}
+  </div>;
+}
+
+function SettingsSection({ sources, setSources, settings, setSettings, onSaveSources, onSaveSettings, savingSources, savingSettings, notify }) {
+  const [sourceQuery, setSourceQuery] = useState("");
+  const [category, setCategory] = useState("All");
+  const [expanded, setExpanded] = useState("");
+  const [credentials, setCredentials] = useState({});
+  const [clears, setClears] = useState([]);
+  const categories = ["All", ...new Set(sources.map((source) => source.category).filter(Boolean))].sort((a,b) => a === "All" ? -1 : a.localeCompare(b));
+  const filtered = sources.filter((source) =>
+    (category === "All" || source.category === category) &&
+    (!sourceQuery || `${source.name} ${source.description} ${source.category}`.toLowerCase().includes(sourceQuery.toLowerCase())),
+  );
+  const enabledCount = sources.filter((source) => source.enabled).length;
+  const readyCount = sources.filter((source) => source.status === "ready").length;
+  const statusLabel = {
+    ready: "Ready", needs_credentials: "Needs credentials", approval_required: "Approval required",
+    research_only: "Research only", licensed_access: "Licensed access", partner_access: "Partner access",
+    artist_authorisation: "Artist authorisation", manual_setup: "Manual setup", client_only: "Client implementation",
+    disabled: "Disabled", not_implemented: "Not implemented",
+  };
+  const updateSource = (id, changes) => setSources((current) => current.map((source) => source.id === id ? { ...source, ...changes } : source));
+  const updateConfig = (path, value) => setSettings((current) => {
+    const next = structuredClone(current || {});
+    const keys = path.split(".");
+    let pointer = next;
+    for (const key of keys.slice(0,-1)) pointer = pointer[key] ||= {};
+    pointer[keys[keys.length - 1]] = value;
+    return next;
+  });
+  const saveSourceConfig = () => onSaveSources(credentials, clears);
+  return <div className="page-stack">
+    <section className="section-heading"><div><div className="eyebrow">SYSTEM CONFIGURATION / DATA GOVERNANCE</div><h1>Configure your <span>intelligence.</span></h1><p>Connect the sources you are entitled to use, choose discovery rules and tune the scoring policy.</p></div><Badge tone="success"><Icon name="lock" size={12}/> Encrypted credentials</Badge></section>
+
+    <Panel title="Data-source directory" sub="A 73-source catalogue. A listing is not a connection: access and implementation status are visible for every source.">
+      <div className="source-summary-grid"><div><strong>{sources.length}</strong><span>Sources catalogued</span></div><div><strong>{enabledCount}</strong><span>Enabled by you</span></div><div><strong>{readyCount}</strong><span>Ready to query</span></div><div><strong>{sources.filter((x) => x.status === "approval_required" || x.status === "partner_access" || x.status === "licensed_access").length}</strong><span>Approval / licence needed</span></div></div>
+      <div className="source-filter-row"><div className="input-icon source-search"><Icon name="search" size={15}/><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search 73 data sources…"/></div><select value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select><span className="source-filter-count">{filtered.length} results</span></div>
+      <div className="source-grid">{filtered.map((source) => <article className={`source-card ${source.enabled ? "source-enabled" : ""}`} key={source.id}>
+        <div className="source-card-top"><div className="source-monogram">{source.name.slice(0,2).toUpperCase()}</div><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(event) => updateSource(source.id,{enabled:event.target.checked})}/><span/></label></div>
+        <div className="source-title"><strong>{source.name}</strong><Badge tone={source.status === "ready" ? "success" : source.status === "needs_credentials" ? "warning" : source.status === "disabled" ? "neutral" : "violet"}>{statusLabel[source.status] || source.status}</Badge></div>
+        <div className="source-category">{source.category} · {source.capability === "evidence_enrichment" ? "Evidence" : source.implemented ? "Search adapter" : "Catalogue / partner"}</div>
+        <p>{source.description}</p>
+        <div className="source-card-bottom"><button className="text-button" onClick={() => setExpanded(expanded === source.id ? "" : source.id)}>{expanded === source.id ? "Hide details" : "Configure / details"} <Icon name="chevron" size={13}/></button><a href={source.docs_url} target="_blank" rel="noreferrer" aria-label={`${source.name} documentation`}><Icon name="external" size={13}/></a></div>
+        {expanded === source.id && <div className="source-config">
+          <p>{source.access_note}</p>
+          {source.fields?.length ? source.fields.map((field) => <label className="field" key={field.key}><span>{field.label}{field.configured && <em>Saved</em>}</span><input type={field.secret ? "password" : "text"} value={credentials[source.id]?.[field.key] || ""} onChange={(event) => setCredentials((prev) => ({...prev,[source.id]:{...(prev[source.id]||{}),[field.key]:event.target.value}}))} placeholder={field.configured ? "Saved · enter to replace" : `Enter ${field.label.toLowerCase()}`}/></label>) : <small>No credential fields are required for this source.</small>}
+          {source.docs_url && <a className="source-doc-link" href={source.docs_url} target="_blank" rel="noreferrer">Official developer documentation <Icon name="external" size={12}/></a>}
+        </div>}
+      </article>)}</div>
+      <div className="settings-actions"><span>Secret values are encrypted by the backend and never returned to the browser.</span><button className="btn btn-primary" onClick={saveSourceConfig} disabled={savingSources}>{savingSources ? "Saving…" : "Save source configuration"} <Icon name="arrow" size={15}/></button></div>
+    </Panel>
+
+    <div className="content-grid settings-grid">
+      <Panel title="Discovery controls" sub="Set the markets, seeds and minimum corroboration needed to enter your queue.">
+        <div className="form-grid">
+          <label className="field"><span>Regional focus</span><select value={settings.region_focus || "africa"} onChange={(event) => updateConfig("region_focus",event.target.value)}><option value="africa">Africa-wide</option><option value="east">East Africa first</option></select></label>
+          <label className="field"><span>Minimum independent sources</span><input type="number" min="1" max="10" value={settings.min_sources_for_candidate ?? 2} onChange={(event) => updateConfig("min_sources_for_candidate",Number(event.target.value))}/></label>
+          <label className="field"><span>Maximum candidates per run</span><input type="number" min="1" max="250" value={settings.max_artists_per_run ?? 100} onChange={(event) => updateConfig("max_artists_per_run",Number(event.target.value))}/></label>
+          <label className="field"><span>Minimum history (days)</span><input type="number" min="1" max="90" value={settings.min_observation_days ?? 7} onChange={(event) => updateConfig("min_observation_days",Number(event.target.value))}/></label>
+        </div>
+        <label className="field seeds-field"><span>Discovery seeds · one per line</span><textarea rows="6" value={(settings.discovery_seeds || []).join("\n")} onChange={(event) => updateConfig("discovery_seeds",event.target.value.split("\n").map((x) => x.trim()).filter(Boolean))}/></label>
+        <label className="check-row"><input type="checkbox" checked={Boolean(settings.auto_discovery_enabled)} onChange={(event) => updateConfig("auto_discovery_enabled",event.target.checked)}/><span><strong>Enable scheduled discovery</strong><small>Background scheduling is opt-in; keep the API local until authentication and worker isolation are configured.</small></span></label>
+        <button className="btn btn-primary" onClick={onSaveSettings} disabled={savingSettings}>{savingSettings ? "Saving…" : "Save discovery controls"}</button>
+      </Panel>
+      <Panel title="Scoring policy" sub="Transparent weights. Missing signals reduce confidence rather than being filled with synthetic values.">
+        <div className="weight-section"><h3>Discovery index</h3>{Object.entries(settings.discovery_weights || DEFAULT_WEIGHTS.discovery_weights).map(([key,value]) => <div className="weight-row" key={key}><label>{key.replaceAll("_"," ")}</label><input type="range" min="0" max="50" step="1" value={value} onChange={(event) => updateConfig(`discovery_weights.${key}`,Number(event.target.value))}/><strong>{value}%</strong></div>)}</div>
+        <div className="weight-section"><h3>Artistic contribution</h3><div className="weight-row"><label>Artistic score share</label><input type="range" min="0" max="100" value={settings.artistic_share ?? 60} onChange={(event) => updateConfig("artistic_share",Number(event.target.value))}/><strong>{settings.artistic_share ?? 60}%</strong></div></div>
+        <div className="thresholds"><h3>Recommendation thresholds</h3><div className="threshold-row"><span>Pursue · artistic floor</span><strong>{settings.tier_rules?.pursue_artistic ?? 78}</strong></div><div className="threshold-row"><span>Pursue · combined</span><strong>{settings.tier_rules?.pursue_combined ?? 75}</strong></div><div className="threshold-row"><span>Meet · artistic floor</span><strong>{settings.tier_rules?.meet_artistic ?? 68}</strong></div><div className="threshold-row"><span>Meet · combined</span><strong>{settings.tier_rules?.meet_combined ?? 65}</strong></div><div className="threshold-row"><span>Watch · combined</span><strong>{settings.tier_rules?.watch_combined ?? 48}</strong></div></div>
+        <button className="btn btn-primary" onClick={onSaveSettings} disabled={savingSettings}>{savingSettings ? "Saving…" : "Save scoring policy"}</button>
+      </Panel>
     </div>
-  );
-}
-
-function EmptyModule({ icon, title, description, className = "" }) {
-  return (
-    <article className={`empty-module panel ${className}`}>
-      <span className="module-icon"><Icon name={icon} size={17} /></span>
-      <div>
-        <h3>{title}</h3>
-        <p>{description}</p>
-      </div>
-    </article>
-  );
-}
-
-function InsightPanel({ icon, title, description, variant = "standard" }) {
-  return (
-    <article className={`insight-panel panel insight-${variant}`}>
-      <SectionHeading kicker="INSIGHT" title={title} />
-      {variant === "chart" && (
-        <div aria-hidden="true" className="empty-chart">
-          <span /><span /><span /><span />
-        </div>
-      )}
-      {variant === "map" && (
-        <div aria-hidden="true" className="empty-map">
-          <Icon name="compass" size={44} />
-        </div>
-      )}
-      {variant === "pipeline" && (
-        <div aria-hidden="true" className="empty-pipeline">
-          <span>No pipeline records</span>
-        </div>
-      )}
-      <div className="insight-empty">
-        <span className="module-icon"><Icon name={icon} size={16} /></span>
-        <p>{description}</p>
-      </div>
-    </article>
-  );
-}
-
-function EmptyState({ icon, title, description, action }) {
-  return (
-    <div className="empty-state">
-      <span className="empty-icon"><Icon name={icon} size={22} /></span>
-      <h3>{title}</h3>
-      <p>{description}</p>
-      {action}
-    </div>
-  );
-}
-
-function formatDate(value) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
+    <Notice tone="warning">Access is not implied by catalogue presence. TikTok Research, Meta research, licensed analytics feeds, partner APIs and artist-authorised dashboards require their stated approval, contract or account permission.</Notice>
+  </div>;
 }
 
 export default function App() {
   const [section, setSection] = useState("discovery");
+  const [dark, setDark] = useState(true);
   const [health, setHealth] = useState(null);
-  const [providers, setProviders] = useState([]);
-  const [selectedProviderIds, setSelectedProviderIds] = useState(["musicbrainz"]);
-  const [providerCredentialDraft, setProviderCredentialDraft] = useState({});
-  const [credentialsToClear, setCredentialsToClear] = useState([]);
-  const [providerSettingsMessage, setProviderSettingsMessage] = useState("");
-  const [page, setPage] = useState({ items: [], total: 0, offset: 0 });
+  const [dashboard, setDashboard] = useState(null);
+  const [sources, setSources] = useState([]);
+  const [settings, setSettings] = useState({});
+  const [candidates, setCandidates] = useState([]);
+  const [artists, setArtists] = useState([]);
+  const [recommendations, setRecommendations] = useState([]);
+  const [selectedArtist, setSelectedArtist] = useState("");
+  const [artistDetail, setArtistDetail] = useState(null);
+  const [filters, setFilters] = useState({ query: "", country: "", genre: "" });
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [query, setQuery] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const searchInputRef = useRef(null);
-  const [discoveryQuery, setDiscoveryQuery] = useState("");
-  const [discoveryResults, setDiscoveryResults] = useState([]);
-  const [discoveryCount, setDiscoveryCount] = useState(null);
-  const [discoveryLoading, setDiscoveryLoading] = useState(false);
-  const [discoveryError, setDiscoveryError] = useState("");
-  const [discoveryQueue, setDiscoveryQueue] = useState({ items: [], total: 0, limit: 50, offset: 0 });
-  const [savedCandidates, setSavedCandidates] = useState({});
-  const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
-  const [preferenceDraft, setPreferenceDraft] = useState(DEFAULT_PREFERENCES);
-  const [preferencesMessage, setPreferencesMessage] = useState("");
+  const [running, setRunning] = useState(false);
+  const [savingSources, setSavingSources] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [mobileMenu, setMobileMenu] = useState(false);
 
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(PREFERENCE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const next = {
-          area: typeof parsed.area === "string" ? parsed.area : "",
-          genre: typeof parsed.genre === "string" ? parsed.genre : "",
-          limit: [5, 10, 25].includes(parsed.limit) ? parsed.limit : 10,
-          enabled: parsed.enabled !== false,
-        };
-        setPreferences(next);
-        setPreferenceDraft(next);
-      }
-    } catch {
-      setPreferencesMessage("Could not read saved preferences. Save your settings again to replace them.");
-    }
-  }, []);
-
-  const reload = useCallback(async () => {
+  const notify = (message, tone = "info") => {
+    setToast({ message, tone });
+    window.clearTimeout(window.__brToastTimer);
+    window.__brToastTimer = window.setTimeout(() => setToast(null), 4200);
+  };
+  const refreshCore = async () => {
     setLoading(true);
-    setError("");
-    try {
-      const [service, artists, connectedProviders, candidateQueue, storedSettings] = await Promise.all([
-        getHealth(),
-        getArtists({ limit: PAGE_SIZE, offset: 0 }),
-        getProviders(),
-        getDiscoveryQueue(),
-        getDiscoverySettings(),
-      ]);
-      let discoverySettings = storedSettings;
-      if (!storedSettings.updated_at) {
-        let legacyPreferences;
-        try {
-          const saved = window.localStorage.getItem(PREFERENCE_KEY);
-          legacyPreferences = saved ? JSON.parse(saved) : null;
-        } catch {
-          setPreferencesMessage("Could not read the previous browser preferences; configure discovery settings again.");
-        }
-        if (legacyPreferences) {
-          discoverySettings = await saveDiscoverySettings({
-            areas: filterValues(typeof legacyPreferences.area === "string" ? legacyPreferences.area : ""),
-            genres: filterValues(typeof legacyPreferences.genre === "string" ? legacyPreferences.genre : ""),
-            result_limit: [5, 10, 25].includes(legacyPreferences.limit) ? legacyPreferences.limit : 10,
-            enabled: legacyPreferences.enabled !== false,
-          });
-        }
-      }
-      setHealth(service);
-      setPage(artists);
-      setProviders(connectedProviders);
-      setSelectedProviderIds(
-        connectedProviders.filter((provider) => provider.enabled).map((provider) => provider.id),
-      );
-      setDiscoveryQueue(candidateQueue);
-      const nextPreferences = preferencesFromSettings(discoverySettings);
-      setPreferences(nextPreferences);
-      setPreferenceDraft(nextPreferences);
-      window.localStorage.setItem(PREFERENCE_KEY, JSON.stringify(nextPreferences));
-    } catch (requestError) {
-      setHealth(null);
-      setError(requestError.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+    const [healthResult, dashboardResult, sourceResult, settingsResult, candidateResult, artistResult, recResult] = await Promise.allSettled([
+      getHealth(), getDashboard(), getSources(), getSettings(), getCandidates({limit:100}), getArtists({limit:200}), getRecommendations(),
+    ]);
+    if (healthResult.status === "fulfilled") setHealth(healthResult.value);
+    else setHealth({status:"error",error:healthResult.reason?.message || "API unavailable"});
+    if (dashboardResult.status === "fulfilled") setDashboard(dashboardResult.value);
+    if (sourceResult.status === "fulfilled") setSources(sourceResult.value.items || []);
+    if (settingsResult.status === "fulfilled") setSettings(settingsResult.value.config || {});
+    if (candidateResult.status === "fulfilled") setCandidates(candidateResult.value.items || []);
+    if (artistResult.status === "fulfilled") setArtists(artistResult.value.items || []);
+    if (recResult.status === "fulfilled") setRecommendations(recResult.value.items || []);
+    setLoading(false);
+  };
+  const refreshDetail = async () => {
+    if (!selectedArtist) { setArtistDetail(null); return; }
+    try { setArtistDetail(await getArtist(selectedArtist)); }
+    catch (error) { notify(error.message,"error"); }
+  };
   useEffect(() => {
-    reload();
-  }, [reload, refreshKey]);
-
-  const runDiscovery = useCallback(async (event) => {
-    event?.preventDefault();
-    const areas = filterValues(preferences.area);
-    const genres = filterValues(preferences.genre);
-    const queryText = discoveryQuery.trim();
-    if (!queryText && !areas.length && !genres.length) {
-      setDiscoveryError("Enter an artist, or set a region or genre in Settings before searching.");
-      return;
-    }
-    setDiscoveryLoading(true);
-    setDiscoveryError("");
-    setDiscoveryResults([]);
-    setDiscoveryCount(null);
-    try {
-      const result = await searchArtists({
-        query: queryText,
-        areas,
-        genres,
-        limit: preferences.limit,
-        offset: 0,
-      });
-      setDiscoveryResults(result.items || []);
-      setDiscoveryCount(result.count ?? (result.items || []).length);
-      setDiscoveryError((result.errors || []).join(" · "));
-    } catch (requestError) {
-      setDiscoveryError(requestError.message);
-    } finally {
-      setDiscoveryLoading(false);
-    }
-  }, [discoveryQuery, preferences]);
-
-  useEffect(() => {
-    const timer = window.setInterval(async () => {
-      try {
-        setDiscoveryQueue(await getDiscoveryQueue());
-      } catch (requestError) {
-        setDiscoveryError(requestError.message);
-      }
-    }, 30_000);
-    return () => window.clearInterval(timer);
+    refreshCore();
+    const saved = localStorage.getItem("br-theme");
+    if (saved === "light") setDark(false);
   }, []);
-
-  const savePreferences = async (event) => {
-    event.preventDefault();
-    const next = {
-      ...preferenceDraft,
-      area: preferenceDraft.area.trim(),
-      genre: preferenceDraft.genre.trim(),
-      limit: Number(preferenceDraft.limit),
-    };
-    setPreferencesMessage("Saving discovery settings…");
-    try {
-      const settings = await saveDiscoverySettings({
-        areas: filterValues(next.area),
-        genres: filterValues(next.genre),
-        result_limit: next.limit,
-        enabled: next.enabled,
-      });
-      const saved = preferencesFromSettings(settings);
-      setPreferences(saved);
-      setPreferenceDraft(saved);
-      try {
-        window.localStorage.setItem(PREFERENCE_KEY, JSON.stringify(saved));
-      } catch {
-        setPreferencesMessage("Settings saved on the backend, but this browser could not cache a local copy.");
-        return;
-      }
-      setPreferencesMessage("Settings saved. Scheduled searches run every 15 minutes when at least one region or genre is configured.");
-    } catch (requestError) {
-      setPreferencesMessage(`Could not save discovery settings: ${requestError.message}`);
-    }
-  };
-
-  const reviewCandidate = async (candidate, status) => {
-    try {
-      await reviewDiscoveryCandidate(candidate.id, status);
-      setDiscoveryQueue(await getDiscoveryQueue());
-      if (status === "accepted") setRefreshKey((key) => key + 1);
-    } catch (requestError) {
-      setDiscoveryError(requestError.message);
-    }
-  };
-
-  const saveProviders = async (event) => {
-    event.preventDefault();
-    const credentialUpdates = Object.fromEntries(
-      Object.entries(providerCredentialDraft)
-        .map(([providerId, fields]) => [
-          providerId,
-          Object.fromEntries(Object.entries(fields).filter(([, value]) => value.trim())),
-        ])
-        .filter(([, fields]) => Object.keys(fields).length > 0),
-    );
-    setProviderSettingsMessage("Saving provider selections…");
-    try {
-      const updatedProviders = await saveProviderSettings({
-        enabled_provider_ids: selectedProviderIds,
-        credential_updates: credentialUpdates,
-        clear_credentials: credentialsToClear,
-      });
-      setProviders(updatedProviders);
-      setSelectedProviderIds(
-        updatedProviders.filter((provider) => provider.enabled).map((provider) => provider.id),
-      );
-      setProviderCredentialDraft({});
-      setCredentialsToClear([]);
-      setProviderSettingsMessage("Provider selections saved. Credentials are stored encrypted by the backend.");
-    } catch (requestError) {
-      setProviderSettingsMessage(`Could not save provider settings: ${requestError.message}`);
-    }
-  };
-
-  const addCandidate = async (candidate) => {
-    setDiscoveryError("");
-    try {
-      await createArtist({
-        name: candidate.name,
-        country: candidate.country,
-        city: candidate.area,
-        genre: candidate.tags.slice(0, 3).join(", ") || null,
-        source_name: candidate.provider_id,
-        source_url: candidate.source_url,
-      });
-      setSavedCandidates((current) => ({ ...current, [candidate.id]: true }));
-      setRefreshKey((key) => key + 1);
-    } catch (requestError) {
-      setDiscoveryError(requestError.message);
-    }
-  };
-
   useEffect(() => {
-    const handleSearchShortcut = (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-      }
-      if (event.key === "Escape" && document.activeElement === searchInputRef.current) {
-        setQuery("");
-        searchInputRef.current.blur();
-      }
-    };
-    window.addEventListener("keydown", handleSearchShortcut);
-    return () => window.removeEventListener("keydown", handleSearchShortcut);
-  }, []);
-
-  const loadMore = async () => {
-    setLoadingMore(true);
-    setError("");
+    document.documentElement.classList.toggle("dark",dark);
+    localStorage.setItem("br-theme",dark ? "dark" : "light");
+  }, [dark]);
+  useEffect(() => { refreshDetail(); }, [selectedArtist]);
+  const onRun = async () => {
+    setRunning(true);
     try {
-      const nextPage = await getArtists({ limit: PAGE_SIZE, offset: page.items.length });
-      setPage((current) => ({ ...nextPage, items: [...current.items, ...nextPage.items] }));
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setLoadingMore(false);
-    }
+      const result = await runDiscovery({...filters, source_ids: sources.filter((source) => source.enabled && source.implemented && source.capability === "identity_search").map((source) => source.id), limit:20});
+      notify(`Scan complete · ${result.candidates_found} candidate identities found`,result.status === "completed" ? "success" : "warning");
+      await refreshCore();
+    } catch (error) { notify(error.message,"error"); }
+    finally { setRunning(false); }
   };
-
-  const removeArtist = async (artist) => {
-    if (!window.confirm(`Delete ${artist.name}? This removes its stored identity record.`)) return;
-    setError("");
+  const onReview = async (candidate, action) => {
     try {
-      await deleteArtist(artist.id);
-      setRefreshKey((key) => key + 1);
-    } catch (requestError) {
-      setError(requestError.message);
-    }
+      const id = candidate.candidate_ids?.[0];
+      await reviewCandidate(id,action,action === "accept" ? "Accepted by A&R review." : "Dismissed by A&R review.");
+      notify(action === "accept" ? `${candidate.name} added to the artist directory` : `${candidate.name} dismissed`,action === "accept" ? "success" : "info");
+      await refreshCore();
+    } catch (error) { notify(error.message,"error"); }
   };
-
-  const filteredArtists = useMemo(() => {
-    const term = query.trim().toLocaleLowerCase();
-    if (!term) return page.items;
-    return page.items.filter((artist) =>
-      [artist.name, artist.country, artist.city, artist.genre, artist.source_name]
-        .some((value) => value?.toLocaleLowerCase().includes(term)),
-    );
-  }, [page.items, query]);
-
-  const onCreated = () => {
-    setShowForm(false);
-    setRefreshKey((key) => key + 1);
+  const onSaveSources = async (credentialUpdates, clears) => {
+    setSavingSources(true);
+    try {
+      const payload = {
+        enabled_source_ids: sources.filter((source) => source.enabled).map((source) => source.id),
+        credential_updates: Object.fromEntries(Object.entries(credentialUpdates).map(([id,fields]) => [id,Object.fromEntries(Object.entries(fields).filter(([,value]) => String(value).trim()))]).filter(([,fields]) => Object.keys(fields).length)),
+        clear_credentials: clears,
+      };
+      const result = await saveSources(payload);
+      setSources(result.items || []);
+      notify(`Saved ${payload.enabled_source_ids.length} source selections`, "success");
+      await refreshCore();
+    } catch (error) { notify(error.message,"error"); }
+    finally { setSavingSources(false); }
   };
-  const content = PAGE_CONTENT[section];
-  const providerCount = health?.configured_data_providers?.length;
-  const backendConnected = health?.status === "ok";
+  const onSaveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const result = await saveSettings(settings);
+      setSettings(result.config || settings);
+      notify("Discovery and scoring settings saved", "success");
+      await refreshCore();
+    } catch (error) { notify(error.message,"error"); }
+    finally { setSavingSettings(false); }
+  };
+  const reloadRecommendations = async () => {
+    const result = await getRecommendations();
+    setRecommendations(result.items || []);
+    const artistPage = await getArtists({limit:200});
+    setArtists(artistPage.items || []);
+  };
+  const current = NAV.find((item) => item.id === section);
+  const selectedProfile = artists.find((artist) => artist.id === selectedArtist);
 
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a aria-label="Breakout Radar home" className="brand" href="/">
-          <span aria-hidden="true" className="brand-mark"><Icon name="music" size={21} /></span>
-          <span className="brand-copy">BREAKOUT <b>RADAR</b><small>A&amp;R INTELLIGENCE</small></span>
-        </a>
-        <div className="sidebar-divider" />
-        <p className="nav-caption">WORKSPACE</p>
-        <nav aria-label="Main navigation" className="nav-list">
-          {NAV_ITEMS.map((item) => (
-            <button
-              aria-current={section === item.id ? "page" : undefined}
-              className={`nav-link${section === item.id ? " nav-link-active" : ""}`}
-              key={item.id}
-              onClick={() => {
-                setSection(item.id);
-                setShowForm(false);
-              }}
-              type="button"
-            >
-              <Icon name={item.icon} size={17} />
-              <span>{item.label}</span>
-              {item.id === "discovery" && <span className="nav-count">{page.total}</span>}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <span className="operator-avatar">A</span>
-          <span className="operator-copy"><b>Workspace operator</b><small>Local workspace</small></span>
-          <span aria-label={backendConnected ? "API connected" : "API disconnected"} className={`connection-dot${backendConnected ? " is-online" : ""}`} />
-        </div>
-      </aside>
-
-      <main className="main-content">
-        <header className="topbar">
-          <label className="global-search">
-            <Icon name="search" size={17} />
-            <input aria-label="Search artist records" onChange={(event) => setQuery(event.target.value)} placeholder="Search artist, city, genre…" ref={searchInputRef} value={query} />
-            <span className="search-shortcut">⌘ K</span>
-          </label>
-          <div className="topbar-meta">
-            <span className={`api-status${backendConnected ? " connected" : ""}`}>
-              <i />{backendConnected ? "API connected" : "API unavailable"}
-            </span>
-            <span aria-hidden="true" className="operator-avatar operator-avatar-small">A</span>
-          </div>
-        </header>
-
-        <div className="workspace">
-          <div className={`page-intro${section === "discovery" ? " page-intro-hidden" : ""}`}>
-            <div>
-              <p className="eyebrow">{content.kicker}</p>
-              <h1>{content.title}</h1>
-              <p>{content.description}</p>
-            </div>
-            <div className="intro-meta">
-              <span><i className={`connection-dot${backendConnected ? " is-online" : ""}`} />{backendConnected ? "Python API online" : "Waiting for API"}</span>
-              <span>{providerCount === undefined ? "PROVIDER STATUS UNKNOWN" : providerCount === 0 ? "NO PROVIDERS CONNECTED" : `${providerCount} PROVIDER${providerCount === 1 ? "" : "S"} CONNECTED`}</span>
-            </div>
-          </div>
-
-          {section === "discovery" && (
-            <>
-              <section className="hero-panel panel">
-                <div className="hero-copy">
-                  <p className="hero-brand"><span className="hero-brand-mark"><Icon name="music" size={14} /></span> BREAKOUT RADAR</p>
-                  <h2>Find tomorrow’s stars<br /><em>with real evidence.</em></h2>
-                  <p>Discover and develop artists without invented scores. Your directory is built only from identities you add and information you are authorized to use.</p>
-                  <button className="button button-primary hero-button" onClick={() => setShowForm(true)} type="button">
-                    <Icon name="plus" size={16} /> Add artist
-                  </button>
-                </div>
-                <div aria-hidden="true" className="hero-art">
-                  <div className="hero-light hero-light-one" />
-                  <div className="hero-light hero-light-two" />
-                  <div className="hero-record">
-                    <Icon name="music" size={48} />
-                  </div>
-                  <div className="hero-soundmark"><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
-                  <div className="hero-art-copy">REAL TALENT.<br /><b>REAL OPPORTUNITY.</b></div>
-                </div>
-              </section>
-
-              <section aria-label="Workspace overview" className="metric-grid">
-                <article className="metric-card panel"><span className="metric-icon icon-green"><Icon name="people" /></span><span className="metric-label">Artist records</span><strong>{loading || error ? "—" : page.total}</strong><small>Operator-entered identities</small></article>
-                <article className="metric-card panel"><span className="metric-icon icon-blue"><Icon name="database" /></span><span className="metric-label">Live providers</span><strong>{providerCount ?? "—"}</strong><small>{providerCount === undefined ? "Provider status unavailable" : providerCount ? "Configured integrations" : "None configured"}</small></article>
-                <article className="metric-card panel"><span className="metric-icon icon-violet"><Icon name="chart" /></span><span className="metric-label">Measurements</span><strong>None</strong><small>No audience history available</small></article>
-                <article className="metric-card metric-status panel"><span className="metric-label">Data status</span><strong><i className={`connection-dot${backendConnected ? " is-online" : ""}`} />{backendConnected ? "Database connected" : "API unavailable"}</strong><small>Authentication is not configured</small></article>
-                <article className="metric-card panel"><span className="metric-icon icon-coral"><Icon name="chart" /></span><span className="metric-label">Artist rankings</span><strong>Off</strong><small>No validated scoring model</small></article>
-                <article className="metric-card panel"><span className="metric-icon icon-lime"><Icon name="spark" /></span><span className="metric-label">Recommendations</span><strong>Off</strong><small>Evidence required first</small></article>
-              </section>
-
-              <section className="live-discovery panel" aria-label="Live artist discovery">
-                <SectionHeading
-                  action={<button className="text-action" onClick={() => setSection("settings")} type="button">Search preferences <Icon name="arrow" size={13} /></button>}
-                  description="Search every enabled and configured artist source. Results are source metadata, not breakout rankings."
-                  kicker="LIVE CATALOG SEARCH"
-                  title="Discover artists"
-                />
-                <form className="live-search-form" onSubmit={runDiscovery}>
-                  <label>
-                    Artist or keyword
-                    <input
-                      autoComplete="off"
-                      maxLength={120}
-                      onChange={(event) => setDiscoveryQuery(event.target.value)}
-                      placeholder="Try an artist name, sound, or scene…"
-                      value={discoveryQuery}
-                    />
-                  </label>
-                  <button className="button button-primary" disabled={discoveryLoading} type="submit">
-                    <Icon name="search" size={15} />{discoveryLoading ? "Searching…" : "Search catalog"}
-                  </button>
-                </form>
-                <div className="discovery-filter-summary">
-                  <span><Icon name="compass" size={14} /> Region: {preferences.area || "Any region"}</span>
-                  <span><Icon name="music" size={14} /> Genre: {preferences.genre || "Any genre"}</span>
-                  <span>Up to {preferences.limit} results</span>
-                </div>
-                <p className="source-disclaimer">Catalog matches are identity metadata. They do not indicate popularity, growth, or emerging status.</p>
-                {discoveryError && <p className="discovery-error" role="alert">{discoveryError}</p>}
-                {discoveryLoading && <p className="loading-state" role="status">Searching enabled providers…</p>}
-                {!discoveryLoading && discoveryCount !== null && discoveryResults.length === 0 && !discoveryError && (
-                  <EmptyState description="Try a different artist, region, or genre." icon="search" title="No catalog matches" />
-                )}
-                {!discoveryLoading && discoveryResults.length > 0 && (
-                  <>
-                    <p className="discovery-result-count">Found {discoveryCount} unique matches across enabled providers.</p>
-                    <div className="candidate-list">
-                      {discoveryResults.map((candidate) => {
-                        const isSaved = savedCandidates[candidate.id] ||
-                          page.items.some((artist) => artist.source_url === candidate.source_url);
-                        return (
-                          <article className="candidate-row" key={candidate.id}>
-                            <span className="candidate-avatar"><Icon name="music" size={17} /></span>
-                            <div className="candidate-info">
-                              <b>{candidate.name}</b>
-                              <span>{[candidate.area, candidate.country, candidate.type].filter(Boolean).join(" · ") || "Location not listed"}</span>
-                              {candidate.tags.length > 0 && <div className="candidate-tags">{candidate.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-                            </div>
-                            <div className="candidate-actions">
-                              <a href={candidate.source_url} rel="noreferrer" target="_blank">{candidate.provider_id}</a>
-                              <a href={`https://open.spotify.com/search/${encodeURIComponent(candidate.name)}`} rel="noreferrer" target="_blank">Spotify search</a>
-                              <a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(candidate.name)}`} rel="noreferrer" target="_blank">YouTube search</a>
-                              <button
-                                className={`button ${isSaved ? "button-saved" : "button-secondary"}`}
-                                disabled={Boolean(isSaved)}
-                                onClick={() => addCandidate(candidate)}
-                                type="button"
-                              >{isSaved ? "In directory" : "Add to directory"}</button>
-                            </div>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </section>
-
-              <section className="review-queue panel" aria-label="Autonomous discovery review queue">
-                <SectionHeading
-                  description={preferences.enabled
-                    ? "The backend checks every 15 minutes, including when this browser is closed. New catalog matches wait here for your review."
-                    : "Automatic discovery is paused. Enable it in Settings to resume scheduled searches."}
-                  kicker="AUTONOMOUS DISCOVERY"
-                  title={`Candidate review queue · ${discoveryQueue.total}`}
-                />
-                {discoveryQueue.items.length === 0 ? (
-                  <EmptyState
-                    description={preferences.enabled
-                      ? "No candidates are waiting. Enable a ready provider and set at least one region or genre in Settings; the backend will search and queue catalog matches."
-                      : "Enable scheduled discovery and configure at least one region or genre to start collecting candidates."}
-                    icon="database"
-                    title="Queue is clear"
-                  />
-                ) : (
-                  <div className="candidate-list">
-                    {discoveryQueue.items.map((candidate) => (
-                      <article className="candidate-row" key={candidate.id}>
-                        <span className="candidate-avatar"><Icon name="music" size={17} /></span>
-                        <div className="candidate-info">
-                          <b>{candidate.name}</b>
-                          <span>{[candidate.area, candidate.country, candidate.artist_type].filter(Boolean).join(" · ") || "Location not listed"}</span>
-                          {candidate.tags.length > 0 && <div className="candidate-tags">{candidate.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-                          <a href={candidate.source_url} rel="noreferrer" target="_blank">{candidate.provider_id} source</a>
-                        </div>
-                        <div className="candidate-actions">
-                          <button className="button button-primary" onClick={() => reviewCandidate(candidate, "accepted")} type="button">Add to directory</button>
-                          <button className="button button-secondary" onClick={() => reviewCandidate(candidate, "dismissed")} type="button">Dismiss</button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              {error && (
-                <div className="error-panel" role="alert">
-                  <div><strong>Could not load artist records.</strong><p>{error}</p></div>
-                  <button className="button button-secondary" onClick={reload} type="button">Retry</button>
-                </div>
-              )}
-              {showForm && <ArtistForm onCancel={() => setShowForm(false)} onCreated={onCreated} />}
-
-              <section className="main-grid">
-                <article className="directory-panel panel">
-                  <SectionHeading
-                    action={<button className="text-action" disabled={loading} onClick={reload} type="button">{loading ? "Loading…" : "Refresh"} <Icon name="arrow" size={14} /></button>}
-                    description="Only artist identities saved to this workspace appear here."
-                    kicker="DISCOVERY"
-                    title="Artist directory"
-                  />
-                  {loading && <p className="loading-state" role="status">Connecting to the Python API…</p>}
-                  {!loading && !error && (
-                    <div className="table-wrap">
-                      <table>
-                        <thead><tr><th scope="col">Artist</th><th scope="col">Location</th><th scope="col">Genre</th><th scope="col">Source</th><th scope="col">Added</th><th scope="col"><span className="visually-hidden">Actions</span></th></tr></thead>
-                        <tbody>{filteredArtists.map((artist) => (
-                          <tr key={artist.id}>
-                            <td><span className="artist-initial"><Icon name="music" size={15} /></span><b className="artist-name">{artist.name}</b></td>
-                            <td>{[artist.city, artist.country].filter(Boolean).join(", ") || "—"}</td>
-                            <td>{artist.genre || "—"}</td>
-                            <td>{artist.source_url ? <a href={artist.source_url} rel="noreferrer" target="_blank">{artist.source_name || "Source"}</a> : artist.source_name || "—"}</td>
-                            <td>{formatDate(artist.created_at)}</td>
-                            <td><button aria-label={`Delete ${artist.name}`} className="delete-button" onClick={() => removeArtist(artist)} type="button">Delete</button></td>
-                          </tr>
-                        ))}
-                        {filteredArtists.length === 0 && (
-                          <tr><td className="empty-table-cell" colSpan="6">
-                            <EmptyState
-                              action={page.items.length < page.total
-                                ? <button className="button button-secondary" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more records"}</button>
-                                : !showForm && <button className="button button-secondary" onClick={() => setShowForm(true)} type="button"><Icon name="plus" size={14} /> Add first artist</button>}
-                              description={page.items.length === 0
-                                ? "No artists have been added yet. Create a real identity record to get started."
-                                : `No matches in the ${page.items.length} loaded records${page.items.length < page.total ? ` of ${page.total}` : ""}.`}
-                              icon={page.items.length === 0 ? "people" : "search"}
-                              title={page.items.length === 0 ? "Your directory is empty" : "No matches"}
-                            />
-                          </td></tr>
-                        )}
-                        </tbody>
-                      </table>
-                      {filteredArtists.length > 0 && <p className="table-caption">Showing {filteredArtists.length} of {page.items.length} loaded identities. No performance metrics are available.</p>}
-                      {page.items.length < page.total && <button className="button button-secondary load-more" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : `Load more records (${page.total - page.items.length} remaining)`}</button>}
-                    </div>
-                  )}
-                </article>
-
-                <aside className="side-stack">
-                  <article className="movers-panel panel">
-                    <SectionHeading action={<button className="text-action" onClick={() => setSection("analyze")} type="button">View all <Icon name="arrow" size={13} /></button>} kicker="MARKET MOVERS" title="Regional activity" />
-                    <EmptyState description="Market movement requires verified, permissioned audience data. Nothing is ranked until those observations exist." icon="compass" title="No regional data yet" />
-                  </article>
-                  <article className="integration-panel panel">
-                    <SectionHeading kicker="DATA CONNECTIONS" title="Live sources" />
-                    <div className="integration-empty">
-                      <span className="source-icon"><Icon name="database" size={19} /></span>
-                      <div>
-                        <b>{providerCount === undefined ? "Provider status unavailable" : providerCount ? `${providerCount} sources connected` : "No sources connected"}</b>
-                        <p>{providerCount === undefined ? "Reconnect to the Python API to check source status." : "Authorized providers supply the evidence behind every insight."}</p>
-                      </div>
-                    </div>
-                    <div className="integration-foot"><span>{providerCount === undefined ? "Status unknown" : `${providerCount} active providers`}</span><button className="text-action" onClick={() => setSection("settings")} type="button">Manage <Icon name="arrow" size={13} /></button></div>
-                  </article>
-                </aside>
-              </section>
-
-              <section aria-label="Signals detected" className="signals-section">
-                <SectionHeading action={<span className="section-status">SOURCE-VERIFIED ONLY</span>} kicker="LIVE SIGNALS" title="Signals detected" />
-                <div className="signal-grid">
-                  <EmptyModule description="No verified activity across connected sources." icon="compass" title="Regional trends" />
-                  <EmptyModule description="No authorized creator-content observations." icon="music" title="UGC signals" />
-                  <EmptyModule description="No audience growth pattern is available to review." icon="chart" title="Growth alerts" />
-                  <EmptyModule description="New movement appears when real source data is connected." icon="spark" title="Emerging trends" />
-                </div>
-              </section>
-
-              <section aria-label="Artist intelligence dashboard" className="insight-grid">
-                <InsightPanel description="Artist rankings need verified performance data and a validated scoring method." icon="people" title="Artist potential" />
-                <InsightPanel description="Connect a permissioned source to view real audience change over time." icon="chart" title="Audience intelligence" variant="chart" />
-                <InsightPanel description="UGC activity and platform breakdowns are unavailable without a connected source." icon="music" title="UGC intelligence" />
-                <InsightPanel description="No growth history is available to evaluate organic or suspicious activity." icon="shield" title="Growth integrity" variant="chart" />
-                <InsightPanel description="Artist profiles show only identities and source details entered in this workspace." icon="people" title="Artist intelligence" />
-                <InsightPanel description="Regional expansion requires verified location and audience observations." icon="compass" title="Geographic expansion" variant="map" />
-                <InsightPanel description="The directory stores identities only; there are no A&R pipeline decisions yet." icon="arrow" title="A&R pipeline" variant="pipeline" />
-                <InsightPanel description="No artist evidence is available for an assistant to summarize." icon="spark" title="A&R copilot" />
-              </section>
-            </>
-          )}
-
-          {section === "analyze" && (
-            <>
-              <section className="analysis-banner panel">
-                <span className="large-module-icon"><Icon name="chart" size={26} /></span>
-                <div><p className="eyebrow">MEASURED DATA ONLY</p><h2>Analysis starts with evidence.</h2><p>No audience histories, audio measurements, or source observations are available in this workspace.</p></div>
-              </section>
-              <section className="module-grid analysis-modules">
-                <EmptyModule description="No authorized platform history connected." icon="chart" title="Audience growth" />
-                <EmptyModule description="Engagement measurements are not available." icon="people" title="Audience composition" />
-                <EmptyModule description="Audio traits are not measured by this application." icon="music" title="Audio analysis" />
-                <EmptyModule description="A human review requires a real artist record and listening session." icon="shield" title="Artist review" />
-              </section>
-            </>
-          )}
-
-          {section === "recommend" && (
-            <section className="recommend-empty panel">
-              <EmptyState
-                description="This workspace has no measured data or validated decision model. Recommendations are disabled rather than guessed."
-                icon="spark"
-                title="No recommendations available"
-              />
-              <div className="recommend-requirements">
-                <span><Icon name="shield" size={16} /> Authorized source data</span>
-                <span><Icon name="chart" size={16} /> Verified outcome evidence</span>
-                <span><Icon name="people" size={16} /> Human A&amp;R review</span>
-              </div>
-            </section>
-          )}
-
-          {section === "settings" && (
-            <>
-              <section className="settings-grid">
-                <article className="settings-panel panel">
-                  <SectionHeading kicker="PERSONALIZE DISCOVERY" title="Search preferences" description="These server-side settings control the background discovery schedule." />
-                  <form className="preferences-form" onSubmit={savePreferences}>
-                    <label>
-                      Countries or regions
-                      <textarea maxLength={1400} onChange={(event) => setPreferenceDraft((current) => ({ ...current, area: event.target.value }))} placeholder="For example, Kenya, Ghana" rows={2} value={preferenceDraft.area} />
-                    </label>
-                    <label>
-                      Genres or scenes
-                      <textarea maxLength={1400} onChange={(event) => setPreferenceDraft((current) => ({ ...current, genre: event.target.value }))} placeholder="For example, alternative R&B, Afrobeats" rows={2} value={preferenceDraft.genre} />
-                    </label>
-                    <label>
-                      Results per search
-                      <select onChange={(event) => setPreferenceDraft((current) => ({ ...current, limit: Number(event.target.value) }))} value={preferenceDraft.limit}>
-                        <option value="5">5 results</option>
-                        <option value="10">10 results</option>
-                        <option value="25">25 results</option>
-                      </select>
-                    </label>
-                    <label className="preference-toggle">
-                      <span><b>Enable recurring discovery</b><small>The backend searches every configured region/genre combination every 15 minutes and stores new identities in the review queue.</small></span>
-                      <input checked={preferenceDraft.enabled} onChange={(event) => setPreferenceDraft((current) => ({ ...current, enabled: event.target.checked }))} type="checkbox" />
-                    </label>
-                    <div className="preferences-actions">
-                      <button className="button button-primary" type="submit">Save settings</button>
-                      {preferencesMessage && <span aria-live="polite" role="status">{preferencesMessage}</span>}
-                    </div>
-                  </form>
-                  {preferences.enabled && !preferences.area.trim() && !preferences.genre.trim() && (
-                    <p className="settings-note" role="status">
-                      Scheduled discovery is enabled but has no search filters. Add at least one region or genre to start collecting candidates.
-                    </p>
-                  )}
-                </article>
-                <article className="settings-panel panel">
-                  <SectionHeading kicker="SERVICE" title="Backend connection" />
-                  <div className="settings-row"><span><Icon name="database" /> API health</span><b className={backendConnected ? "value-positive" : "value-warning"}>{backendConnected ? "Connected" : "Unavailable"}</b></div>
-                  <div className="settings-row"><span><Icon name="database" /> Database</span><b>{health?.database || "Unknown"}</b></div>
-                  <div className="settings-row"><span><Icon name="shield" /> Authentication</span><b>Not configured</b></div>
-                  <div className="settings-row"><span><Icon name="people" /> Artist identities</span><b>{loading || error ? "Unknown" : page.total}</b></div>
-                </article>
-              </section>
-              <section className="provider-settings panel">
-                <SectionHeading
-                  description="Choose which sources power manual and scheduled search. Provider keys are sent only to this backend and never returned to the browser."
-                  kicker="SOURCE CONFIGURATION"
-                  title={`Data providers · ${providers.length}`}
-                />
-                <form onSubmit={saveProviders}>
-                  <div className="provider-grid">
-                    {providers.map((provider) => {
-                      const configuredFields = provider.configured_fields || [];
-                      return (
-                        <article className="provider-card" key={provider.id}>
-                          <label className="provider-enable">
-                            <input
-                              checked={selectedProviderIds.includes(provider.id)}
-                              onChange={(event) => setSelectedProviderIds((current) =>
-                                event.target.checked
-                                  ? [...new Set([...current, provider.id])]
-                                  : current.filter((id) => id !== provider.id))}
-                              type="checkbox"
-                            />
-                            <span className={`provider-icon provider-${provider.id}`}><Icon name={provider.id === "musicbrainz" ? "music" : "database"} size={18} /></span>
-                            <span className="provider-copy">
-                              <span className="provider-name-row">
-                                <b>{provider.name}</b>
-                                <span className={`provider-state${provider.status === "available" ? " is-configured" : ""}`}>
-                                  {provider.status === "available" ? "Ready" : provider.status === "needs_credentials" ? "Needs credentials" : "Disabled"}
-                                </span>
-                              </span>
-                              <span className="provider-description">{provider.description}</span>
-                              <span className="provider-access-note">{provider.access_note}</span>
-                              <a href={provider.url} rel="noreferrer" target="_blank">Provider docs <Icon name="arrow" size={12} /></a>
-                            </span>
-                          </label>
-                          {(provider.fields || []).length > 0 && (
-                            <div className="provider-credentials">
-                              {provider.fields.map((field) => {
-                                const credentialId = `${provider.id}.${field.key}`;
-                                const isConfigured = configuredFields.includes(field.key) &&
-                                  !credentialsToClear.includes(credentialId);
-                                return (
-                                  <label key={field.key}>
-                                    {field.label}
-                                    <input
-                                      autoComplete="new-password"
-                                      onChange={(event) => setProviderCredentialDraft((current) => ({
-                                        ...current,
-                                        [provider.id]: {
-                                          ...current[provider.id],
-                                          [field.key]: event.target.value,
-                                        },
-                                      }))}
-                                      disabled={credentialsToClear.includes(credentialId)}
-                                      placeholder={isConfigured ? "Saved · enter to replace" : "Not configured"}
-                                      type={field.secret ? "password" : "text"}
-                                      value={providerCredentialDraft[provider.id]?.[field.key] || ""}
-                                    />
-                                    {isConfigured && (
-                                      <span className="credential-clear">
-                                        <input
-                                          checked={credentialsToClear.includes(credentialId)}
-                                          onChange={(event) => setCredentialsToClear((current) =>
-                                            event.target.checked
-                                              ? [...current, credentialId]
-                                              : current.filter((value) => value !== credentialId))}
-                                          type="checkbox"
-                                        />
-                                        Remove saved value
-                                      </span>
-                                    )}
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </article>
-                      );
-                    })}
-                  </div>
-                  <div className="preferences-actions provider-save">
-                    <button className="button button-primary" type="submit">Save provider settings</button>
-                    {providerSettingsMessage && <span aria-live="polite" role="status">{providerSettingsMessage}</span>}
-                  </div>
-                </form>
-                <p className="settings-note">Credentials are encrypted in the backend database with PROVIDER_SECRETS_KEY. Authentication is not configured, so keep the API bound to localhost and do not expose it to untrusted networks. Paid plans, app approval, and provider terms may still be required.</p>
-              </section>
-            </>
-          )}
-
-          <footer className="footer">
-            <span className="footer-brand"><Icon name="music" size={17} /> BREAKOUT RADAR</span>
-            <span>Better data. Better decisions.</span>
-            <span>Unauthenticated · keep access local</span>
-          </footer>
-        </div>
-      </main>
-    </div>
-  );
+  return <div className={`app-shell ${dark ? "theme-dark" : "theme-light"}`}>
+    <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}>
+      <div className="brand"><div className="brand-symbol"><Icon name="wave" size={25}/></div><div className="brand-name">BREAKOUT <b>RADAR</b><small>A&R INTELLIGENCE</small></div><button className="mobile-close icon-btn" onClick={() => setMobileMenu(false)}><Icon name="x"/></button></div>
+      <div className="sidebar-label">WORKSPACE</div>
+      <nav aria-label="Main navigation">{NAV.map((item) => <button key={item.id} className={`nav-item ${section === item.id ? "nav-active" : ""}`} onClick={() => {setSection(item.id);setMobileMenu(false);}}><span className="nav-icon"><Icon name={item.icon}/></span><span><strong>{item.label}</strong><small>{item.short}</small></span>{section === item.id && <i/>}</button>)}</nav>
+      <div className="sidebar-bottom"><div className="workspace-card"><div className="workspace-avatar">AR</div><div><strong>A&R Workspace</strong><small>Local research environment</small></div><Badge tone="success">PRIVATE</Badge></div><div className="security-note"><Icon name="shield" size={14}/><span>Credentials encrypted at rest.<br/>API bound to localhost.</span></div></div>
+    </aside>
+    {mobileMenu && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileMenu(false)}/>}
+    <main className="main-shell">
+      <header className="topbar"><button className="mobile-menu icon-btn" onClick={() => setMobileMenu(true)}><Icon name="menu"/></button><div className="breadcrumb"><span>BREAKOUT RADAR</span><b>/</b><strong>{current?.label}</strong></div><div className="topbar-right"><div className="api-status"><span className={health?.status === "ok" ? "status-dot" : "status-dot status-down"}/>{health?.status === "ok" ? "API connected" : "API unavailable"}</div><button className="icon-btn" aria-label="Toggle theme" onClick={() => setDark(!dark)}><Icon name={dark ? "sun" : "moon"}/></button><button className="icon-btn" aria-label="Refresh workspace" onClick={refreshCore}><Icon name="refresh"/></button><div className="user-chip"><span>AR</span><small>Research team</small></div></div></header>
+      <div className="page-container">
+        {health?.status === "error" && <Notice tone="error">Backend unavailable: {health.error}. Start the FastAPI service on port 8000, then refresh.</Notice>}
+        {loading && !dashboard ? <div className="loading-screen"><div className="loading-orbit"><Icon name="radar" size={34}/></div><strong>Preparing your intelligence workspace</strong><span>Connecting to source registry and artist records…</span></div> :
+          section === "discovery" ? <DiscoverySection dashboard={dashboard} candidates={candidates} artists={artists} sources={sources} loading={loading} running={running} filters={filters} setFilters={setFilters} onRun={onRun} onReview={onReview} selectedArtist={selectedArtist} setSelectedArtist={(id) => {setSelectedArtist(id);setSection("analyse");}}/> :
+          section === "analyse" ? <AnalyseSection artists={artists} selectedArtist={selectedArtist} setSelectedArtist={setSelectedArtist} artistDetail={artistDetail} reloadDetail={refreshDetail} busy={busy} notify={notify}/> :
+          section === "recommendations" ? <RecommendationsSection recommendations={recommendations} reload={reloadRecommendations} notify={notify}/> :
+          <SettingsSection sources={sources} setSources={setSources} settings={settings} setSettings={setSettings} onSaveSources={onSaveSources} onSaveSettings={onSaveSettings} savingSources={savingSources} savingSettings={savingSettings} notify={notify}/>}
+      </div>
+      <footer className="app-footer"><span>BREAKOUT RADAR <b>v3.0</b></span><span>Evidence first. People decide.</span><span>{health?.authentication || "Local environment"}</span></footer>
+    </main>
+    {toast && <div className={`toast toast-${toast.tone}`} role="status"><span className="toast-mark"><Icon name={toast.tone === "error" ? "x" : "check"} size={14}/></span>{toast.message}<button className="icon-btn" onClick={() => setToast(null)}><Icon name="x" size={14}/></button></div>}
+  </div>;
 }
