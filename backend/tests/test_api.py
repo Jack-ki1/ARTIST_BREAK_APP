@@ -9,6 +9,8 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.database import Base, get_db
 from app.models import DiscoveryConfiguration
+from app.quotas import claim_provider_call
+from app.providers import provider_status
 from app.scheduler import run_discovery_cycle
 
 
@@ -34,6 +36,20 @@ def client(monkeypatch):
         yield test_client
     main.app.dependency_overrides.clear()
     test_engine.dispose()
+
+
+def test_provider_status_respects_an_explicit_empty_selection():
+    providers = provider_status([])
+    assert providers
+    assert not any(provider["enabled"] for provider in providers)
+
+
+def test_youtube_daily_request_budget_is_persisted_and_enforced(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_SEARCH_DAILY_BUDGET", "2")
+
+    assert claim_provider_call(main.SessionLocal, "youtube") is True
+    assert claim_provider_call(main.SessionLocal, "youtube") is True
+    assert claim_provider_call(main.SessionLocal, "youtube") is False
 
 
 def test_health_discloses_authentication_status_and_configured_sources(client):
