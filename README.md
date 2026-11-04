@@ -381,7 +381,7 @@ Acceptance is explicit.
 
 ### Backend
 
-- Python 3.10 or later is the documented minimum.
+- Python 3.11 or later (the current CI baseline is Python 3.13).
 - `pip` for installing dependencies.
 - Network access to the selected external provider APIs.
 
@@ -1336,13 +1336,17 @@ make test PYTHON=/path/to/python
 
 ## Build and CI
 
-`.github/workflows/ci.yml` runs two independent jobs:
+``.github/workflows/ci.yml` runs three jobs:
 
-1. Install Python dependencies and execute backend pytest on Python 3.13.
-2. Install Node 24.15 dependencies with `npm ci`, run Vitest, and build the
-   frontend.
-3. When both test jobs pass, assemble the source plus production frontend and
-   publish `ARTIST_BREAK_APP.zip` as a workflow artifact.
+1. Backend dependency installation and pytest on Python 3.13.
+2. Frontend dependency installation, Vitest, and production build on Node
+   24.15.
+3. After both test jobs pass, package the source plus production frontend,
+   verify ZIP integrity, and upload `ARTIST_BREAK_APP.zip` as a workflow
+   artifact.
+
+The source bundle excludes local environment files, databases, virtual
+environments, and `node_modules`.
 
 The pre-commit configuration includes whitespace and YAML/JSON checks, Ruff,
 ESLint, Prettier, and Gitleaks. Install `pre-commit` and run `make lint` to
