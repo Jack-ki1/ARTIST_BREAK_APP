@@ -45,6 +45,22 @@ class ProviderConfiguration(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
+class ProviderDailyUsage(Base):
+    """Persistent per-provider daily request ledger for quota-limited APIs."""
+
+    __tablename__ = "provider_daily_usage"
+
+    provider_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    usage_date: Mapped[str] = mapped_column(String(10), primary_key=True)
+    request_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class DiscoveryCandidate(Base):
     __tablename__ = "discovery_candidates"
     __table_args__ = (
