@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "engines": {
-    "node": ">=20.19"
+    "node": ">=24.15"
   },
   "dependencies": {
     "react": "^18.3.1",
