@@ -29,7 +29,8 @@ from app.models import (
 )
 from app.schemas import (
     ArtistCreate, CandidateReview, DecisionCreate, DiscoveryRunRequest,
-    HealthResponse, ReviewCreate, SettingsWrite, SourceSettingsWrite,
+    DiscoveryRunResponse, HealthResponse, ReviewCreate, SettingsWrite,
+    SourceSettingsWrite,
 )
 from app.scoring import (
     DEFAULT_SETTINGS, artistic_overall, discovery_index, explain_discovery,
