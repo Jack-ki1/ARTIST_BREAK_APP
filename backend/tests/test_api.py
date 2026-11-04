@@ -68,7 +68,8 @@ def test_provider_credentials_are_encrypted_and_not_returned(client, monkeypatch
     })
     assert response.status_code == 200
     payload = response.json()
-    assert payload["items"][0]["status"] == "ready"
+    youtube = next(item for item in payload["items"] if item["id"] == "youtube")
+    assert youtube["status"] == "ready"
     assert "test-api-key-never-return" not in response.text
 
     with sessions() as session:
