@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -14,6 +15,7 @@ from app.models import (
     utc_now,
 )
 from app.providers import PROVIDER_CATALOG, expand_area_filter
+from app.quotas import claim_provider_call
 from app.secrets import decrypt_credentials
 
 
@@ -66,6 +68,12 @@ async def run_discovery_cycle(
                 for key, value in credentials.items()
                 if key.startswith(f"{provider_id}.")
             }
+            if not claim_provider_call(session_factory, provider_id):
+                logger.warning(
+                    "Scheduled %s search skipped: daily provider request budget exhausted",
+                    provider_names.get(provider_id, provider_id),
+                )
+                continue
             try:
                 items = await search_provider(
                     provider_id,
@@ -147,7 +155,7 @@ async def run_discovery_scheduler(
         timeout = max(
             0,
             DISCOVERY_INTERVAL_SECONDS - (asyncio.get_running_loop().time() - cycle_started),
-        )
+        ) + random.uniform(0, 30)
         try:
             await asyncio.wait_for(wakeup.wait(), timeout=timeout)
         except asyncio.TimeoutError:
