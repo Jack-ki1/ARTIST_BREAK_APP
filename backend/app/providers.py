@@ -207,6 +207,8 @@ def _normalize(
     artist_type: str | None = None,
     disambiguation: str | None = None,
     tags: list[str] | None = None,
+    metrics: dict[str, Any] | None = None,
+    image_url: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": f"{provider_id}:{external_id}",
@@ -219,6 +221,8 @@ def _normalize(
         "disambiguation": disambiguation,
         "tags": [tag for tag in (tags or []) if isinstance(tag, str) and tag][:8],
         "source_url": source_url,
+        "metrics": metrics or {},
+        "image_url": image_url,
     }
 
 
@@ -443,7 +447,9 @@ async def search_provider(
             )
             return [
                 _normalize("deezer", str(item["id"]), item["name"], item["link"],
-                           country=item.get("country"), tags=[])
+                           country=item.get("country"), tags=[],
+                           metrics={"fans": item.get("nb_fan"), "albums": item.get("nb_album")},
+                           image_url=item.get("picture_medium"))
                 for item in payload.get("data", []) if item.get("id") and item.get("name")
             ]
         if provider_id == "wikidata":
