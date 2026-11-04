@@ -1,29 +1,108 @@
-# Data sources and permissions
+# Data sources, adapters and access policy
 
-## Integrated artist search
+Breakout Radar contains **73 distinct source entries**. The settings directory is not a promise that all 73 are connected or that each provider permits arbitrary competitor analytics.
 
-The backend can search these sources through the provider settings:
+## Adapter coverage
 
-- MusicBrainz, Wikidata, and Deezer
-- Spotify, YouTube Data API, Apple Music, Last.fm, Discogs, Google Knowledge Graph
-- TheAudioDB, Jamendo, Audius, Ticketmaster Discovery, SoundCloud, Musixmatch, and Genius
+### Identity search — 22 adapter paths
 
-Each adapter returns provider-attributed artist identity metadata. Sources differ in coverage, authentication, rate limits, approval requirements, commercial-use terms, and response quality. A provider marked ready only means the required credentials are present; it does not guarantee that the provider will accept a request.
+The 16 existing catalogue adapters are:
 
-Enter credentials in **Settings → Data providers**. Credentials are encrypted by the backend with `PROVIDER_SECRETS_KEY`. Do not put credentials in frontend code or browser storage. Review the current provider documentation and terms before enabling an integration for ongoing or commercial use.
+- MusicBrainz
+- Wikidata
+- Deezer
+- Spotify Web API
+- YouTube Data API
+- Apple Music API
+- Last.fm
+- Discogs
+- Google Knowledge Graph
+- TheAudioDB
+- Jamendo
+- Audius
+- Ticketmaster Discovery
+- SoundCloud
+- Musixmatch
+- Genius
 
-MusicBrainz, Wikidata, and Deezer do not require credentials for the implemented search paths. MusicBrainz requests are serialized and limited to about one request per second; configure a maintainer-owned `MUSICBRAINZ_CONTACT` URL or email. Other providers require the relevant API key, application credentials, or access token; Audius requires an application name.
+The six additional identity-search adapters are:
 
-The application reserves YouTube `search.list` requests in a persistent UTC-day ledger. The default budget is 80 calls per day, leaving headroom below the standard 100-call daily allocation; override it only after verifying the quota assigned to the configured Google Cloud project. The manual API also rejects requests estimated to exceed 100 upstream calls, and scheduled discovery defaults to 100 provider calls per cycle. These safeguards cover the documented YouTube search quota and unbounded fan-out; they do not automatically enforce undocumented or account-specific quotas for every other integration.
+- Wikipedia
+- iTunes Search API
+- Bluesky / AT Protocol
+- Mastodon
+- setlist.fm
+- Twitch Helix
 
-## Scheduled and manual discovery
+These are official API integrations. They still require working provider access, and credentialed sources require the user's own approved credentials.
 
-Manual search sends all selected regions and genres in one backend request, deduplicates results by provider identity, and reports provider-specific errors. Searches are limited to 25 region/genre combinations and a configurable estimate of 100 upstream calls. Scheduled discovery runs approximately every 15 minutes while the backend is running, skips providers without configured credentials, and stops at its per-cycle request budget. With no region/genre filters configured, the scheduler intentionally skips the cycle. The **East Africa** shortcut searches Burundi, Comoros, Djibouti, Eritrea, Ethiopia, Kenya, Madagascar, Malawi, Mauritius, Mozambique, Rwanda, Seychelles, Somalia, South Sudan, Tanzania, Uganda, Zambia, and Zimbabwe. **Central Africa** searches Angola, Cameroon, the Central African Republic, Chad, Congo, the Democratic Republic of the Congo, Equatorial Guinea, Gabon, and Sao Tome and Principe. These country-level searches use sovereign states; territories are excluded. New scheduled results enter a review queue; they are not added to the artist directory until accepted.
+### Evidence enrichment — 4 adapter paths
 
-## Data integrity
+- GDELT Project — news/press article metadata and source links.
+- Reddit Data API — query-specific community evidence with OAuth.
+- Flickr — public image references plus licence metadata.
+- Openverse — openly licensed media search and licence attribution.
 
-- Catalog presence does not indicate that an artist is emerging, popular, or worth signing.
-- No artist images, follower counts, scores, audience growth, or recommendation data are fabricated.
-- Search results preserve provider identity and source links.
-- Provider outages, missing credentials, and invalid responses are reported rather than replaced with sample results.
-- This local workspace does not authenticate API callers; keep it bound to localhost and do not expose it to untrusted networks.
+Evidence is stored as links, titles, short summaries and source context. It is not converted into a global audience count or presented as an official artist metric.
+
+## Full 73-entry directory
+
+| Category | Sources |
+|---|---|
+| Music metadata | MusicBrainz, Wikidata, Wikipedia, Discogs, Google Knowledge Graph, TheAudioDB, Musixmatch, Genius, Wikidata SPARQL, MusicBrainz Tags & Genres |
+| Streaming and catalogue | Deezer, Spotify Web API, Apple Music API, iTunes Search API, Last.fm, Jamendo, Audius, SoundCloud, Apple Music Feed, Spotify Charts, Apple Music Charts, Amazon Music, TIDAL, Qobuz, Pandora AMP, Anghami, Boomplay, Mdundo, Shazam Charts |
+| Social and community | Bluesky / AT Protocol, Mastodon, Reddit Data API, TikTok Display API, TikTok Research API, Instagram Graph API, Threads API, Facebook Pages Graph API, X API, Pinterest API v5, Tumblr API v2, LinkedIn Community Management |
+| Video and creator | YouTube Data API, Twitch Helix, Vimeo, YouTube Analytics API |
+| Live and events | Ticketmaster Discovery, setlist.fm, Songkick API, Bandsintown for Artists |
+| Press and media | GDELT Project, Google Alerts RSS, Music press RSS feeds, Naija music press feeds, OkayAfrica, Afropunk |
+| Media and identity | Wikimedia Commons, Flickr, Openverse |
+| Listening and demand signals | ListenBrainz, Google Trends API, Wikimedia Pageviews |
+| Commercial / industry data | Chartmetric, Soundcharts, Songstats, Viberate, Luminate, Mediabase, Radio monitoring partners, SoundExchange, DDEX / distributor feeds |
+| Audio intelligence | ShazamKit |
+
+The exact provider metadata, documentation links, required credential fields and access notes are in `backend/app/source_data.py` and `backend/app/source_data_extra.py`.
+
+## What each status means
+
+| Status | Meaning |
+|---|---|
+| Ready | The app has the relevant adapter and required local credential fields are present. Remote access is not guaranteed until a request succeeds. |
+| Needs credentials | A search adapter exists, but required API credentials are missing. |
+| Disabled | The operator has not enabled the source. |
+| Approval required | The API product/scopes require app review or explicit approval. |
+| Artist authorisation | The API is for an artist or team that authorises access to their own account. |
+| Research only | The service restricts access to eligible research users/organisations. |
+| Licensed access | A commercial data licence or subscription is required. |
+| Partner access | Access is limited to a partner or approved developer programme. |
+| Manual setup | The operator configures a permitted feed or reviewed source URL. |
+| Client only | This requires an app/device-side SDK implementation, not a backend search request. |
+
+## Important provider-specific boundaries
+
+- **Spotify:** the integration is limited to catalogue identity metadata. Do not use Spotify Content to train AI/ML models or derive listenership metrics from Spotify Content or the Spotify Service. Spotify developer access and scopes change; verify current account eligibility.
+- **YouTube:** public channel/video search uses the Data API. Channel Analytics requires OAuth and the channel owner's explicit authorisation. The app reserves `search.list` calls in a persistent budget of 80 per Pacific-time day by default.
+- **TikTok:** the Display API is for approved app products/scopes and creator-authorised data. The Research API is available only to qualified researchers and eligible organisations/regions; it is not treated as a commercial analytics source.
+- **Instagram, Threads and Facebook Pages:** use approved Meta permissions and account/page authorisation. Private account insights are not obtained from public search.
+- **X, Pinterest and LinkedIn:** availability is governed by current developer tiers, product approval, scopes and commercial policies. LinkedIn's community-management product is restricted and is not a public people-search endpoint.
+- **Bandsintown:** API use is tied to an artist/team that authorises the integration. Do not use artist-specific keys to analyse unrelated artists.
+- **Songkick:** listed as a partner/legacy option; new API access may be restricted. It is not marked as an active search adapter.
+- **Google Trends:** access is limited/early-access. No unofficial scraping fallback is used.
+- **Chartmetric, Soundcharts, Songstats, Viberate, Luminate, Mediabase and radio-monitoring data:** require commercial or partner licensing.
+- **Flickr, Openverse and Wikimedia:** preserve individual work-level attribution and licence information. Publicly viewable media is not automatically licensed for commercial reuse.
+- **RSS, chart URLs and artist profile links:** must be supplied from a feed/source the operator is permitted to ingest. Manual entries are not silently scraped.
+
+## Credential storage and operating guidance
+
+1. Configure a Fernet key in `backend/.env` using `PROVIDER_SECRETS_KEY`.
+2. Enable a source in Settings and supply only the credentials it requests.
+3. Save the source configuration. Credentials are encrypted in the backend database and are never returned to the browser.
+4. A Ready status means required fields are present; run a discovery scan to confirm that the remote provider accepts the request.
+5. Disable a provider when credentials expire or access is withdrawn. Honour provider retention/deletion rules.
+
+Do not put provider keys in `frontend/`, source control, screenshots or issue comments. The application API is currently unauthenticated and should remain on loopback or behind trusted access control.
+
+## Data collected
+
+Identity metadata includes source ID, external ID, source URL, name and optional profile metadata. Numeric observations are stored with source ID, metric name, scope, timestamp and source URL. Press/community/media records are stored as evidence references. Provider values are not blended into one cross-platform audience total.
+
+Source readiness is a configuration signal, not a live health check. Provider-specific quotas, current access terms, data retention, attribution and commercial rights must be verified before production use.
