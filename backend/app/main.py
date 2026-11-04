@@ -559,10 +559,13 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
     for source_id in requested:
         for term in seeds:
             if not _claim_source_request(db, source_id):
-                source_results[source_id] = {
-                    "status": "quota_exhausted",
-                    "error": "Daily YouTube search budget exhausted; quota resets at midnight Pacific Time."
-                }
+                if source_results.get(source_id, {}).get("status") == "success":
+                    source_results[source_id]["quota_exhausted"] = True
+                else:
+                    source_results[source_id] = {
+                        "status": "quota_exhausted",
+                        "error": "Daily YouTube search budget exhausted; quota resets at midnight Pacific Time."
+                    }
                 continue
             tasks.append(query_one(source_id, term))
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -573,7 +576,8 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
             logger.warning("Discovery source request failed: %s", result)
             continue
         source_id, term, items = result
-        source_results.setdefault(source_id, {"status": "success", "queries": [], "results": 0})
+        if source_results.get(source_id, {}).get("status") != "success":
+            source_results[source_id] = {"status": "success", "queries": [], "results": 0}
         source_results[source_id]["queries"].append(term)
         source_results[source_id]["results"] += len(items)
         for item in items:
