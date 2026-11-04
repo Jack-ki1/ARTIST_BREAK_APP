@@ -1,5 +1,6 @@
 import asyncio
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -9,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.database import Base, get_db
 from app.models import DiscoveryConfiguration
+from app.providers import search_enabled_providers
 from app.quotas import claim_provider_call
 from app.providers import provider_status
 from app.scheduler import run_discovery_cycle
@@ -50,6 +52,86 @@ def test_youtube_daily_request_budget_is_persisted_and_enforced(client, monkeypa
     assert claim_provider_call(main.SessionLocal, "youtube") is True
     assert claim_provider_call(main.SessionLocal, "youtube") is True
     assert claim_provider_call(main.SessionLocal, "youtube") is False
+
+
+def test_provider_search_retries_rate_limited_requests():
+    from app.providers import _get_json
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                json={"error": "rate limited"},
+                request=request,
+            )
+        return httpx.Response(200, json={"artists": []}, request=request)
+
+    async def execute():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await _get_json(http, "https://provider.example/search", params={})
+
+    payload = asyncio.run(execute())
+    assert payload == {"artists": []}
+    assert len(requests) == 2
+
+
+def test_provider_aggregation_batches_filters_and_deduplicates(monkeypatch):
+    from app import providers
+
+    calls = []
+
+    async def fake_search(provider_id, **filters):
+        calls.append((provider_id, filters["area"], filters["genre"]))
+        return [{
+            "id": "musicbrainz:shared-artist",
+            "external_id": "shared-artist",
+            "provider_id": provider_id,
+            "name": "Shared Artist",
+            "source_url": "https://musicbrainz.org/artist/shared-artist",
+            "tags": [],
+        }]
+
+    monkeypatch.setattr(providers, "search_provider", fake_search)
+    result = asyncio.run(search_enabled_providers(
+        ["musicbrainz"],
+        {},
+        query=None,
+        area=None,
+        genre=None,
+        areas=["Kenya", "Ghana"],
+        genres=["Afrobeats", "Highlife"],
+        limit=5,
+    ))
+
+    assert len(calls) == 4
+    assert result["count"] == 1
+    assert result["items"][0]["id"] == "musicbrainz:shared-artist"
+
+
+def test_scheduler_skips_youtube_after_daily_budget_is_exhausted(client, monkeypatch):
+    monkeypatch.setenv("YOUTUBE_SEARCH_DAILY_BUDGET", "1")
+    assert client.put(
+        "/api/providers",
+        json={"enabled_provider_ids": ["youtube"]},
+    ).status_code == 200
+    assert client.put(
+        "/api/discovery/settings",
+        json={"areas": ["Kenya"], "genres": [], "enabled": True},
+    ).status_code == 200
+
+    assert claim_provider_call(main.SessionLocal, "youtube") is True
+    searches = []
+
+    async def fake_search(provider_id, **filters):
+        searches.append(provider_id)
+        return []
+
+    assert asyncio.run(run_discovery_cycle(main.SessionLocal, fake_search)) == 0
+    assert searches == []
 
 
 def test_health_discloses_authentication_status_and_configured_sources(client):
