@@ -585,6 +585,30 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
             normalized = _normalise_name(name)
             if not normalized:
                 continue
+
+            # Once an A&R reviewer has accepted a cross-source identity, future
+            # scans append a new source-scoped observation instead of recreating
+            # it as a fresh candidate.
+            linked_identity = db.scalar(select(ArtistIdentity).where(
+                ArtistIdentity.source_id == source_id,
+                ArtistIdentity.external_id == external_id,
+            ))
+            if linked_identity is not None:
+                linked_identity.last_seen_at = _now()
+                linked_identity.source_url = source_url
+                linked_identity.raw_metadata = {
+                    "bio": item.get("bio"),
+                    "metrics": item.get("metrics") or {},
+                    "context": item.get("context") or {},
+                    "last_query": term,
+                }
+                linked_artist = db.get(Artist, linked_identity.artist_id)
+                if linked_artist is not None:
+                    linked_artist.last_seen_at = _now()
+                    _metric_observations(db, linked_artist.id, source_id, item.get("metrics") or {}, source_url)
+                    _recompute_artist(db, linked_artist, settings)
+                continue
+
             existing = db.scalar(select(ArtistCandidate).where(
                 ArtistCandidate.source_id == source_id, ArtistCandidate.external_id == external_id,
             ))
