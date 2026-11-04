@@ -164,7 +164,7 @@ function DiscoverySection({ dashboard, candidates, artists, sources, loading, ru
         {loading ? <div className="skeleton-list"><span/><span/><span/></div> : candidates.length === 0 ? <Empty title="Your discovery queue is clear" body="Run a scan to find emerging artists. New identities are held here until your team accepts them."/> :
           <div className="candidate-list">{candidates.map((item) => <article className="candidate-row" key={item.group_key}>
             <div className="artist-avatar">{item.image_url ? <img src={item.image_url} alt=""/> : <span>{item.name.slice(0,2).toUpperCase()}</span>}</div>
-            <div className="candidate-main"><div className="candidate-title">{item.name}<Badge tone={item.source_count > 1 ? "success" : "neutral"}>{item.source_count} source{item.source_count === 1 ? "" : "s"}</Badge></div>
+            <div className="candidate-main"><div className="candidate-title">{item.name}<Badge tone={item.source_count > 1 ? "success" : "neutral"}>{item.source_count} source{item.source_count === 1 ? "" : "s"}</Badge><Badge tone={item.corroborated ? "success" : "warning"}>{item.corroborated ? "Corroborated" : "Provisional"}</Badge></div>
               <div className="candidate-sub">{[item.city, item.country, ...(item.genres || []).slice(0,2)].filter(Boolean).join(" · ") || "Location / genre not yet verified"}</div>
               <div className="candidate-signals"><SourceDots ids={item.source_ids}/><span>{item.signal_summary?.[0] || "Source-backed identity match"}</span></div>
             </div>
@@ -197,6 +197,40 @@ function DiscoverySection({ dashboard, candidates, artists, sources, loading, ru
           </tr>)}
         </tbody></table></div>}
     </Panel>
+  </div>;
+}
+
+function ObservationTimeline({ observations = [] }) {
+  const groups = new Map();
+  for (const item of observations) {
+    const key = `${item.source_id} · ${item.metric}`;
+    const rows = groups.get(key) || [];
+    rows.push(item);
+    groups.set(key, rows);
+  }
+  const entry = [...groups.entries()]
+    .map(([label, rows]) => [label, rows.sort((a,b) => new Date(a.observed_at) - new Date(b.observed_at))])
+    .filter(([, rows]) => rows.length > 1)
+    .sort((a,b) => b[1].length - a[1].length)[0];
+  if (!entry) return null;
+  const [label, rows] = entry;
+  const values = rows.map((row) => Number(row.value));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const spread = Math.max(1, max - min);
+  const points = values.map((value,index) => {
+    const x = 18 + (index / Math.max(1, values.length - 1)) * 464;
+    const y = 92 - ((value - min) / spread) * 68;
+    return `${x},${y}`;
+  }).join(" ");
+  return <div className="timeline-chart">
+    <div><span>History · {label}</span><small>{rows.length} observations · values remain source-specific</small></div>
+    <svg viewBox="0 0 500 112" role="img" aria-label={`Time series for ${label}`}>
+      <path d="M18 24H482M18 58H482M18 92H482" stroke="var(--border)" strokeDasharray="3 5" fill="none"/>
+      <polyline points={points} fill="none" stroke="var(--lime)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+      {points.split(" ").map((point,index) => { const [cx,cy] = point.split(","); return <circle key={index} cx={cx} cy={cy} r="3.2" fill="var(--panel)" stroke="var(--lime)" strokeWidth="2"/>; })}
+    </svg>
+    <div><span>{fmtMetric(values[0],label)}</span><span>{fmtMetric(values[values.length-1],label)}</span></div>
   </div>;
 }
 
@@ -271,6 +305,7 @@ function AnalyseSection({ artists, selectedArtist, setSelectedArtist, artistDeta
           <Panel title="Observed platform signals" sub="Latest values are source-attributed, not added into one synthetic audience count." action={<Badge tone="cyan">TIME-STAMPED</Badge>}>
             {latestMetrics.length === 0 ? <Empty title="No numeric observations yet" body="Discovery only stores metrics returned by an authorised source. Connect a source that provides permitted public or owner-authorised counts."/> :
               <div className="metric-grid">{latestMetrics.map((item) => <div className="metric-card" key={item.id}><span>{item.metric.replaceAll("_"," ")}</span><strong>{fmtMetric(item.value, item.metric)}</strong><small>{item.source_id} · {dateLabel(item.observed_at)}</small></div>)}</div>}
+            <ObservationTimeline observations={observations}/>
             <div className="source-observation-list">{selected.identities?.map((identity) => <div key={identity.id} className="source-identity-row"><span className="source-favicon">{identity.source_id.slice(0,2).toUpperCase()}</span><div><strong>{identity.source_id}</strong><small>{identity.external_id} · {identity.verified ? "verified" : "unverified match"}</small></div><a href={identity.source_url} target="_blank" rel="noreferrer"><Icon name="external" size={14}/></a></div>)}</div>
           </Panel>
           <Panel title="Evidence library" sub="Links that help explain activity around the artist." action={<button className="btn btn-soft btn-small" onClick={collect} disabled={collecting}><Icon name="refresh" size={14}/>{collecting ? "Collecting…" : "Collect evidence"}</button>}>
@@ -470,7 +505,7 @@ export default function App() {
   const onRun = async () => {
     setRunning(true);
     try {
-      const result = await runDiscovery({...filters, source_ids: sources.filter((source) => source.enabled && source.implemented && source.capability === "identity_search").map((source) => source.id), limit:20});
+      const result = await runDiscovery({...filters, source_ids: sources.filter((source) => source.enabled && source.status === "ready" && source.implemented && source.capability === "identity_search").map((source) => source.id), limit:20});
       notify(`Scan complete · ${result.candidates_found} candidate identities found`,result.status === "completed" ? "success" : "warning");
       await refreshCore();
     } catch (error) { notify(error.message,"error"); }
