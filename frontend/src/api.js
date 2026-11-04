@@ -53,3 +53,5 @@ export const getRecommendations = () => request("/recommendations");
 export const getRuns = () => request("/runs");
 export const getAlerts = () => request("/alerts");
 export const markAlertRead = (id) => request(`/alerts/${encodeURIComponent(id)}/read`, { method: "PATCH" });
+
+export const getAutomationStatus = () => request("/automation/status");

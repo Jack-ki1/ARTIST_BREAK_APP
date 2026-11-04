@@ -35,3 +35,8 @@
 - Universal access to competitor social analytics or private streaming dashboards.
 - AI music-listening scores.
 - A statistically validated probability of breakout success.
+
+
+## Remaining production work
+
+The autonomous worker, live heartbeat, recurring identity scans and recurring evidence refresh are implemented for the local single-workspace deployment. The next production gate is not more dashboard surface area: it is authentication/workspace isolation, Alembic schema migrations, distributed scheduling locks, provider-specific connection-test UX, integration-contract tests against live sandbox accounts, monitoring/retention controls, and a rights-cleared audio-analysis pipeline. Human A&R review remains mandatory; the current project does not claim to listen to recordings or predict hit probability.

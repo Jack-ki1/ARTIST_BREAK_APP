@@ -221,3 +221,15 @@ class AppAlert(Base):
     body: Mapped[str | None] = mapped_column(Text)
     read: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "radar_worker_heartbeat"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    state: Mapped[str] = mapped_column(String(32), default="starting", nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_discovery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_discovery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)

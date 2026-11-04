@@ -7,7 +7,23 @@ Breakout Radar is an Africa-first artist discovery and A&R research workspace. I
 3. **Recommendations** — combine discovery evidence with artistic judgement and record explicit A&R decisions.
 4. **Settings** — configure 73 data-source entries, credentials, discovery seeds, guardrails and scoring weights.
 
-The UI borrows the dark, high-contrast, chart-led design language of the pixel-perfect-replica demo. Its data model and operating workflows are a new implementation for this repository.
+The UI follows the supplied light workspace reference: a white canvas, fixed left navigation, persistent top search, blue-violet active states and responsive three-column provider cards. Its data model and operating workflows are a new implementation for this repository.
+
+## Fastest local start (Docker)
+
+The Compose stack starts PostgreSQL, the FastAPI service, the autonomous collection worker and the web UI. The API and UI ports are bound to `127.0.0.1` because authentication and workspace isolation are not implemented yet.
+
+```bash
+cp .env.example .env
+# Generate a Fernet key and paste it into PROVIDER_SECRETS_KEY in .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+docker compose up --build -d
+```
+
+Open `http://127.0.0.1:5173`. Check `http://127.0.0.1:8000/api/automation/status` to confirm that the worker heartbeat is live. `docker compose logs -f worker api` shows collection activity. Stop with `docker compose down`; persistent PostgreSQL data remains in the `radar-postgres` volume. To remove the database as well, use `docker compose down -v`.
+
+The initial configuration enables recurring discovery every 6 hours and evidence refresh every 24 hours. The worker checks settings every 30 seconds. A provider only contributes when its adapter is implemented, enabled, correctly configured, and permitted for the intended use. A `Ready` source means local setup is complete; it does not guarantee the upstream service will accept the next request.
+
 
 ## What is implemented
 
@@ -21,7 +37,7 @@ The UI borrows the dark, high-contrast, chart-led design language of the pixel-p
 - Cross-source artist grouping uses a normalized-name key and retains provider identifiers separately.
 - Accepted identities are rechecked on later scans. New metric observations are appended with provider, metric, scope, timestamp and source URL.
 
-**A catalogue entry is not a claim that its provider is connected.** A source displays Ready when the application has an implemented adapter and its locally required credentials are present. This is not a live credential-validation guarantee. Sources with restricted access are not called by discovery just because they appear in the directory.
+**A catalogue entry is not a claim that its provider is connected.** A source displays Ready when the application has an implemented adapter and its locally required credentials are present. This is not a live credential-validation guarantee. Sources with restricted access are not called by discovery just because they appear in the directory. Review [the verified provider access notes](docs/PROVIDER_ACCESS_NOTES.md) before enabling any credentialed, research-only or commercial data source.
 
 ### Analysis and decision support
 
@@ -39,7 +55,7 @@ The UI borrows the dark, high-contrast, chart-led design language of the pixel-p
 - Provider credentials are encrypted at rest using Fernet.
 - YouTube search requests are reserved against a persistent daily budget (80 by default) using Google's midnight-Pacific reset day, including daylight-saving changes.
 - A manual discovery run has an estimated upstream-call ceiling (MAX_PROVIDER_CALLS_PER_SEARCH, default 100).
-- Scheduled discovery is opt-in and runs through a separate worker process.
+- Scheduled discovery is enabled by default (every 6 hours) and can be paused in Settings; the separate worker process must be running for scheduled scans and evidence refresh to occur.
 - API and worker should be run as one worker each against the same database until distributed locking is configured.
 
 ## Architecture

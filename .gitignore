@@ -13,3 +13,7 @@ dist/
 .env
 .env.*
 !.env.example
+
+*.db
+*.sqlite
+.venv/

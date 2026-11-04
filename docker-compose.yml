@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: breakout_radar
+      POSTGRES_USER: breakout
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-local-password}
+    volumes:
+      - radar-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U breakout -d breakout_radar"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://breakout:${POSTGRES_PASSWORD:-change-this-local-password}@db:5432/breakout_radar
+      PROVIDER_SECRETS_KEY: ${PROVIDER_SECRETS_KEY}
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      YOUTUBE_SEARCH_DAILY_BUDGET: ${YOUTUBE_SEARCH_DAILY_BUDGET:-80}
+      MAX_PROVIDER_CALLS_PER_SEARCH: ${MAX_PROVIDER_CALLS_PER_SEARCH:-100}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://breakout:${POSTGRES_PASSWORD:-change-this-local-password}@db:5432/breakout_radar
+      PROVIDER_SECRETS_KEY: ${PROVIDER_SECRETS_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      YOUTUBE_SEARCH_DAILY_BUDGET: ${YOUTUBE_SEARCH_DAILY_BUDGET:-80}
+      MAX_PROVIDER_CALLS_PER_SEARCH: ${MAX_PROVIDER_CALLS_PER_SEARCH:-100}
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:5173:80"
+volumes:
+  radar-postgres:

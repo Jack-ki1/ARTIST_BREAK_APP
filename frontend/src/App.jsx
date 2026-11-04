@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getHealth, getDashboard, getSources, saveSources, getSettings, saveSettings,
   getCandidates, runDiscovery, reviewCandidate, getArtists, getArtist,
-  collectEvidence, saveReview, saveDecision, getRecommendations, getRuns,
+  collectEvidence, saveReview, saveDecision, getRecommendations, getRuns, getAutomationStatus,
 } from "./api.js";
 
 const NAV = [
@@ -153,7 +153,7 @@ function DiscoverySection({ dashboard, candidates, artists, sources, loading, ru
         <label className="field field-grow"><span>Artist, scene or discovery query</span><div className="input-icon"><Icon name="search" size={16}/><input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="e.g. Nairobi alternative R&B, new Bongo Flava…"/></div></label>
         <label className="field"><span>Country / market</span><select value={filters.country} onChange={(event) => setFilters({ ...filters, country: event.target.value })}><option value="">All markets</option>{["Kenya","Tanzania","Uganda","Rwanda","Nigeria","Ghana","South Africa","Zambia","Ethiopia","Senegal","Côte d’Ivoire","Cameroon"].map((country) => <option key={country}>{country}</option>)}</select></label>
         <label className="field"><span>Genre</span><input value={filters.genre} onChange={(event) => setFilters({ ...filters, genre: event.target.value })} placeholder="Afrobeats, Gengetone…"/></label>
-        <button className="btn btn-primary scan-button" onClick={onRun} disabled={running}><Icon name="bolt" size={17}/>{running ? "Scanning sources…" : "Run discovery"}</button>
+        <button className="btn btn-primary scan-button" onClick={() => onRun()} disabled={running}><Icon name="bolt" size={17}/>{running ? "Scanning sources…" : "Run discovery"}</button>
       </div>
       <div className="scan-foot"><span><Icon name="shield" size={13}/> Search fan-out is capped; results are queued for human review.</span><span>{run ? `Last run ${timeAgo(run.started_at)}` : "No discovery run recorded yet"}</span></div>
       {running && <div className="scan-loading"><span/><span/><span/><span/><span/><small>Querying selected source adapters</small></div>}
@@ -373,7 +373,7 @@ function RecommendationsSection({ recommendations, reload, notify }) {
   </div>;
 }
 
-function SettingsSection({ sources, setSources, settings, setSettings, onSaveSources, onSaveSettings, savingSources, savingSettings, notify }) {
+function SettingsSection({ sources, setSources, settings, setSettings, automation, onSaveSources, onSaveSettings, savingSources, savingSettings, notify }) {
   const [sourceQuery, setSourceQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [expanded, setExpanded] = useState("");
@@ -403,24 +403,43 @@ function SettingsSection({ sources, setSources, settings, setSettings, onSaveSou
   });
   const saveSourceConfig = () => onSaveSources(credentials, clears);
   return <div className="page-stack">
-    <section className="section-heading"><div><div className="eyebrow">SYSTEM CONFIGURATION / DATA GOVERNANCE</div><h1>Configure your <span>intelligence.</span></h1><p>Connect the sources you are entitled to use, choose discovery rules and tune the scoring policy.</p></div><Badge tone="success"><Icon name="lock" size={12}/> Encrypted credentials</Badge></section>
+    <section className="section-heading settings-page-heading"><div><div className="eyebrow">SETTINGS / DATA GOVERNANCE</div><h1>Workspace settings</h1><p>Manage connected data providers, discovery automation and the A&R scoring framework.</p></div></section>
 
-    <Panel title="Data-source directory" sub="A 73-source catalogue. A listing is not a connection: access and implementation status are visible for every source.">
-      <div className="source-summary-grid"><div><strong>{sources.length}</strong><span>Sources catalogued</span></div><div><strong>{enabledCount}</strong><span>Enabled by you</span></div><div><strong>{readyCount}</strong><span>Ready to query</span></div><div><strong>{sources.filter((x) => x.status === "approval_required" || x.status === "partner_access" || x.status === "licensed_access").length}</strong><span>Approval / licence needed</span></div></div>
+    <Panel className="source-panel" title={<><span className="source-eyebrow">SOURCE CONFIGURATION</span><span>Data providers · {sources.length}</span></>} sub="Choose which sources power manual and scheduled search. Provider keys are sent only to this backend and never returned to the browser.">
+      <div className="source-toolbar-note"><span><strong>{readyCount}</strong> configured for search</span><span><strong>{enabledCount}</strong> selected</span><span>Sources are tested when a scan runs</span></div>
       <div className="source-filter-row"><div className="input-icon source-search"><Icon name="search" size={15}/><input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Search 73 data sources…"/></div><select value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select><span className="source-filter-count">{filtered.length} results</span></div>
-      <div className="source-grid">{filtered.map((source) => <article className={`source-card ${source.enabled ? "source-enabled" : ""}`} key={source.id}>
-        <div className="source-card-top"><div className="source-monogram">{source.name.slice(0,2).toUpperCase()}</div><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(event) => updateSource(source.id,{enabled:event.target.checked})}/><span/></label></div>
-        <div className="source-title"><strong>{source.name}</strong><Badge tone={source.status === "ready" ? "success" : source.status === "needs_credentials" ? "warning" : source.status === "disabled" ? "neutral" : "violet"}>{statusLabel[source.status] || source.status}</Badge></div>
-        <div className="source-category">{source.category} · {source.capability === "evidence_enrichment" ? "Evidence" : source.implemented ? "Search adapter" : "Catalogue / partner"}</div>
-        <p>{source.description}</p>
-        <div className="source-card-bottom"><button className="text-button" onClick={() => setExpanded(expanded === source.id ? "" : source.id)}>{expanded === source.id ? "Hide details" : "Configure / details"} <Icon name="chevron" size={13}/></button><a href={source.docs_url} target="_blank" rel="noreferrer" aria-label={`${source.name} documentation`}><Icon name="external" size={13}/></a></div>
-        {expanded === source.id && <div className="source-config">
-          <p>{source.access_note}</p>
-          {source.fields?.length ? source.fields.map((field) => <label className="field" key={field.key}><span>{field.label}{field.configured && <em>Saved</em>}</span><input type={field.secret ? "password" : "text"} value={credentials[source.id]?.[field.key] || ""} onChange={(event) => setCredentials((prev) => ({...prev,[source.id]:{...(prev[source.id]||{}),[field.key]:event.target.value}}))} placeholder={field.configured ? "Saved · enter to replace" : `Enter ${field.label.toLowerCase()}`}/></label>) : <small>No credential fields are required for this source.</small>}
-          {source.docs_url && <a className="source-doc-link" href={source.docs_url} target="_blank" rel="noreferrer">Official developer documentation <Icon name="external" size={12}/></a>}
-        </div>}
-      </article>)}</div>
+      <div className="source-grid">{filtered.map((source) => {
+        const isReady = source.status === "ready";
+        const statusTone = isReady ? "ready" : source.status === "disabled" ? "disabled" : "restricted";
+        const icon = source.category?.toLowerCase().includes("social") || source.category?.toLowerCase().includes("video") ? "users" : "database";
+        return <article className={`source-card ${source.enabled ? "source-enabled" : ""} ${expanded === source.id ? "source-expanded" : ""}`} key={source.id}>
+          <div className="source-provider-row">
+            <label className="switch source-checkbox" title={`Enable ${source.name}`}><input type="checkbox" checked={source.enabled} onChange={(event) => updateSource(source.id,{enabled:event.target.checked})}/><span/></label>
+            <div className={`source-icon-tile source-icon-${statusTone}`}><Icon name={icon} size={21}/></div>
+            <div className="source-title"><strong>{source.name}</strong><span className={`provider-status provider-status-${statusTone}`}>{isReady ? "Ready" : source.status === "disabled" ? "Disabled" : statusLabel[source.status] || source.status}</span></div>
+          </div>
+          <p className="source-description">{source.description}</p>
+          {source.access_note && <p className="source-access-note">{source.access_note}</p>}
+          <div className="source-card-links"><button className="text-button" onClick={() => setExpanded(expanded === source.id ? "" : source.id)}>{expanded === source.id ? "Hide configuration" : "Configure source"} <Icon name="chevron" size={13}/></button>{source.docs_url && <a href={source.docs_url} target="_blank" rel="noreferrer">Provider docs <Icon name="arrow" size={13}/></a>}</div>
+          {expanded === source.id && <div className="source-config">
+            <div className="source-config-meta"><span>{source.category}</span><span>{source.capability === "evidence_enrichment" ? "Evidence enrichment" : source.implemented ? "Identity search adapter" : "Directory entry only"}</span></div>
+            {source.fields?.length ? source.fields.map((field) => <label className="field" key={field.key}><span>{field.label}{field.configured && <em>Saved</em>}</span><input autoComplete="off" type={field.secret ? "password" : "text"} value={credentials[source.id]?.[field.key] || ""} onChange={(event) => setCredentials((prev) => ({...prev,[source.id]:{...(prev[source.id]||{}),[field.key]:event.target.value}}))} placeholder={field.configured ? "Configured · enter to replace" : `Enter ${field.label.toLowerCase()}`}/></label>) : <small>No credential fields are required for this source.</small>}
+            {source.docs_url && <a className="source-doc-link" href={source.docs_url} target="_blank" rel="noreferrer">Official developer documentation <Icon name="external" size={12}/></a>}
+          </div>}
+        </article>;
+      })}</div>
       <div className="settings-actions"><span>Secret values are encrypted by the backend and never returned to the browser.</span><button className="btn btn-primary" onClick={saveSourceConfig} disabled={savingSources}>{savingSources ? "Saving…" : "Save source configuration"} <Icon name="arrow" size={15}/></button></div>
+    </Panel>
+
+    <Panel className="automation-panel" title="Autonomous collection" sub="A live worker heartbeat shows whether background collection is actually running.">
+      <div className="automation-status-row">
+        <div className={`automation-indicator ${automation?.worker_online ? "is-online" : "is-offline"}`}><span/>{automation?.worker_online ? "Worker online" : "Worker not detected"}</div>
+        <div className="automation-stat"><small>Last heartbeat</small><strong>{automation?.last_seen_at ? timeAgo(automation.last_seen_at) : "Not yet seen"}</strong></div>
+        <div className="automation-stat"><small>Last discovery</small><strong>{automation?.last_discovery_at ? timeAgo(automation.last_discovery_at) : "No run yet"}</strong></div>
+        <div className="automation-stat"><small>Next scheduled scan</small><strong>{automation?.next_discovery_at ? dateLabel(automation.next_discovery_at) : "Waiting for worker"}</strong></div>
+      </div>
+      {automation?.last_error && <Notice tone="warning">Last worker error: {automation.last_error}</Notice>}
+      <p className="automation-caption">The background worker executes recurring multi-source searches, rechecks accepted artist identities, records source-specific metric history and refreshes public evidence links. Provider outages and exhausted quotas are surfaced in run history.</p>
     </Panel>
 
     <div className="content-grid settings-grid">
@@ -430,9 +449,12 @@ function SettingsSection({ sources, setSources, settings, setSettings, onSaveSou
           <label className="field"><span>Minimum independent sources</span><input type="number" min="1" max="10" value={settings.min_sources_for_candidate ?? 2} onChange={(event) => updateConfig("min_sources_for_candidate",Number(event.target.value))}/></label>
           <label className="field"><span>Maximum candidates per run</span><input type="number" min="1" max="250" value={settings.max_artists_per_run ?? 100} onChange={(event) => updateConfig("max_artists_per_run",Number(event.target.value))}/></label>
           <label className="field"><span>Minimum history (days)</span><input type="number" min="1" max="90" value={settings.min_observation_days ?? 7} onChange={(event) => updateConfig("min_observation_days",Number(event.target.value))}/></label>
+          <label className="field"><span>Discovery interval (hours)</span><input type="number" min="1" max="168" value={settings.auto_discovery_interval_hours ?? 6} onChange={(event) => updateConfig("auto_discovery_interval_hours",Number(event.target.value))}/></label>
         </div>
         <label className="field seeds-field"><span>Discovery seeds · one per line</span><textarea rows="6" value={(settings.discovery_seeds || []).join("\n")} onChange={(event) => updateConfig("discovery_seeds",event.target.value.split("\n").map((x) => x.trim()).filter(Boolean))}/></label>
-        <label className="check-row"><input type="checkbox" checked={Boolean(settings.auto_discovery_enabled)} onChange={(event) => updateConfig("auto_discovery_enabled",event.target.checked)}/><span><strong>Enable scheduled discovery</strong><small>Run `python -m app.worker` in a separate backend terminal to execute scheduled scans. Keep the API local until authentication and worker isolation are configured.</small></span></label>
+        <label className="check-row"><input type="checkbox" checked={Boolean(settings.auto_discovery_enabled ?? true)} onChange={(event) => updateConfig("auto_discovery_enabled",event.target.checked)}/><span><strong>Enable scheduled discovery</strong><small>Scan the configured markets every {settings.auto_discovery_interval_hours ?? 6} hours. Pause it here at any time.</small></span></label>
+        <label className="check-row"><input type="checkbox" checked={Boolean(settings.auto_evidence_enabled ?? true)} onChange={(event) => updateConfig("auto_evidence_enabled",event.target.checked)}/><span><strong>Refresh artist evidence automatically</strong><small>Recheck a rotating batch of tracked artists every {settings.auto_evidence_interval_hours ?? 24} hours for press, community and open-media references.</small></span></label>
+        <label className="field"><span>Evidence refresh interval (hours)</span><input type="number" min="1" max="168" value={settings.auto_evidence_interval_hours ?? 24} onChange={(event) => updateConfig("auto_evidence_interval_hours",Number(event.target.value))}/></label>
         <button className="btn btn-primary" onClick={onSaveSettings} disabled={savingSettings}>{savingSettings ? "Saving…" : "Save discovery controls"}</button>
       </Panel>
       <Panel title="Scoring policy" sub="Transparent weights. Missing signals reduce confidence rather than being filled with synthetic values.">
@@ -448,7 +470,9 @@ function SettingsSection({ sources, setSources, settings, setSettings, onSaveSou
 
 export default function App() {
   const [section, setSection] = useState("discovery");
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(false);
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [automation, setAutomation] = useState(null);
   const [health, setHealth] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [sources, setSources] = useState([]);
@@ -474,8 +498,8 @@ export default function App() {
   };
   const refreshCore = async () => {
     setLoading(true);
-    const [healthResult, dashboardResult, sourceResult, settingsResult, candidateResult, artistResult, recResult] = await Promise.allSettled([
-      getHealth(), getDashboard(), getSources(), getSettings(), getCandidates({limit:100}), getArtists({limit:200}), getRecommendations(),
+    const [healthResult, dashboardResult, sourceResult, settingsResult, candidateResult, artistResult, recResult, automationResult] = await Promise.allSettled([
+      getHealth(), getDashboard(), getSources(), getSettings(), getCandidates({limit:100}), getArtists({limit:200}), getRecommendations(), getAutomationStatus(),
     ]);
     if (healthResult.status === "fulfilled") setHealth(healthResult.value);
     else setHealth({status:"error",error:healthResult.reason?.message || "API unavailable"});
@@ -485,6 +509,7 @@ export default function App() {
     if (candidateResult.status === "fulfilled") setCandidates(candidateResult.value.items || []);
     if (artistResult.status === "fulfilled") setArtists(artistResult.value.items || []);
     if (recResult.status === "fulfilled") setRecommendations(recResult.value.items || []);
+    if (automationResult.status === "fulfilled") setAutomation(automationResult.value);
     setLoading(false);
   };
   const refreshDetail = async () => {
@@ -501,11 +526,34 @@ export default function App() {
     document.documentElement.classList.toggle("dark",dark);
     localStorage.setItem("br-theme",dark ? "dark" : "light");
   }, [dark]);
+  useEffect(() => {
+    const poll = async () => {
+      const results = await Promise.allSettled([getDashboard(), getCandidates({limit:100}), getArtists({limit:200}), getRecommendations(), getAutomationStatus()]);
+      if (results[0].status === "fulfilled") setDashboard(results[0].value);
+      if (results[1].status === "fulfilled") setCandidates(results[1].value.items || []);
+      if (results[2].status === "fulfilled") setArtists(results[2].value.items || []);
+      if (results[3].status === "fulfilled") setRecommendations(results[3].value.items || []);
+      if (results[4].status === "fulfilled") setAutomation(results[4].value);
+    };
+    const timer = window.setInterval(poll, 60000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => { refreshDetail(); }, [selectedArtist]);
-  const onRun = async () => {
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        document.querySelector(".global-search input")?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, []);
+  const onRun = async (filterOverrides = null) => {
+    const activeFilters = filterOverrides ? { ...filters, ...filterOverrides } : filters;
     setRunning(true);
     try {
-      const result = await runDiscovery({...filters, source_ids: sources.filter((source) => source.enabled && source.status === "ready" && source.implemented && source.capability === "identity_search").map((source) => source.id), limit:20});
+      const result = await runDiscovery({...activeFilters, source_ids: sources.filter((source) => source.enabled && source.status === "ready" && source.implemented && source.capability === "identity_search").map((source) => source.id), limit:20});
       notify(`Scan complete · ${result.candidates_found} candidate identities found`,result.status === "completed" ? "success" : "warning");
       await refreshCore();
     } catch (error) { notify(error.message,"error"); }
@@ -550,28 +598,37 @@ export default function App() {
     const artistPage = await getArtists({limit:200});
     setArtists(artistPage.items || []);
   };
+  const submitGlobalSearch = (event) => {
+    event.preventDefault();
+    const query = globalSearch.trim();
+    if (!query || running) return;
+    const nextFilters = { ...filters, query };
+    setFilters(nextFilters);
+    setSection("discovery");
+    void onRun(nextFilters);
+  };
   const current = NAV.find((item) => item.id === section);
   const selectedProfile = artists.find((artist) => artist.id === selectedArtist);
 
   return <div className={`app-shell ${dark ? "theme-dark" : "theme-light"}`}>
     <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}>
-      <div className="brand"><div className="brand-symbol"><Icon name="wave" size={25}/></div><div className="brand-name">BREAKOUT <b>RADAR</b><small>A&R INTELLIGENCE</small></div><button className="mobile-close icon-btn" onClick={() => setMobileMenu(false)}><Icon name="x"/></button></div>
+      <div className="brand"><div className="brand-symbol"><Icon name="music" size={25}/></div><div className="brand-name">BREAKOUT <b>RADAR</b><small>A&R INTELLIGENCE</small></div><button className="mobile-close icon-btn" onClick={() => setMobileMenu(false)}><Icon name="x"/></button></div>
       <div className="sidebar-label">WORKSPACE</div>
-      <nav aria-label="Main navigation">{NAV.map((item) => <button key={item.id} className={`nav-item ${section === item.id ? "nav-active" : ""}`} onClick={() => {setSection(item.id);setMobileMenu(false);}}><span className="nav-icon"><Icon name={item.icon}/></span><span><strong>{item.label}</strong><small>{item.short}</small></span>{section === item.id && <i/>}</button>)}</nav>
+      <nav aria-label="Main navigation">{NAV.map((item) => <button key={item.id} className={`nav-item ${section === item.id ? "nav-active" : ""}`} onClick={() => {setSection(item.id);setMobileMenu(false);}}><span className="nav-icon"><Icon name={item.icon}/></span><span><strong>{item.label}</strong><small>{item.short}</small></span>{item.id === "discovery" && candidates.length > 0 && <span className="nav-count">{candidates.length > 99 ? "99+" : candidates.length}</span>}{section === item.id && <i/>}</button>)}</nav>
       <div className="sidebar-bottom"><div className="workspace-card"><div className="workspace-avatar">AR</div><div><strong>A&R Workspace</strong><small>Local research environment</small></div><Badge tone="success">PRIVATE</Badge></div><div className="security-note"><Icon name="shield" size={14}/><span>Credentials encrypted at rest.<br/>API bound to localhost.</span></div></div>
     </aside>
     {mobileMenu && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileMenu(false)}/>}
     <main className="main-shell">
-      <header className="topbar"><button className="mobile-menu icon-btn" onClick={() => setMobileMenu(true)}><Icon name="menu"/></button><div className="breadcrumb"><span>BREAKOUT RADAR</span><b>/</b><strong>{current?.label}</strong></div><div className="topbar-right"><div className="api-status"><span className={health?.status === "ok" ? "status-dot" : "status-dot status-down"}/>{health?.status === "ok" ? "API connected" : "API unavailable"}</div><button className="icon-btn" aria-label="Toggle theme" onClick={() => setDark(!dark)}><Icon name={dark ? "sun" : "moon"}/></button><button className="icon-btn" aria-label="Refresh workspace" onClick={refreshCore}><Icon name="refresh"/></button><div className="user-chip"><span>AR</span><small>Research team</small></div></div></header>
+      <header className="topbar"><button className="mobile-menu icon-btn" onClick={() => setMobileMenu(true)}><Icon name="menu"/></button><form className="global-search" onSubmit={submitGlobalSearch}><Icon name="search" size={17}/><input aria-label="Search artist, city or genre" value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="Search artist, city, genre..."/><kbd>⌘K</kbd></form><div className="topbar-right"><div className="api-status"><span className={health?.status === "ok" ? "status-dot" : "status-dot status-down"}/>{health?.status === "ok" ? "API connected" : "API unavailable"}</div><button className="icon-btn topbar-refresh" aria-label="Refresh workspace" onClick={refreshCore}><Icon name="refresh"/></button><div className="user-chip"><span>A</span></div></div></header>
       <div className="page-container">
         {health?.status === "error" && <Notice tone="error">Backend unavailable: {health.error}. Start the FastAPI service on port 8000, then refresh.</Notice>}
         {loading && !dashboard ? <div className="loading-screen"><div className="loading-orbit"><Icon name="radar" size={34}/></div><strong>Preparing your intelligence workspace</strong><span>Connecting to source registry and artist records…</span></div> :
           section === "discovery" ? <DiscoverySection dashboard={dashboard} candidates={candidates} artists={artists} sources={sources} loading={loading} running={running} filters={filters} setFilters={setFilters} onRun={onRun} onReview={onReview} selectedArtist={selectedArtist} setSelectedArtist={(id) => {setSelectedArtist(id);setSection("analyse");}}/> :
           section === "analyse" ? <AnalyseSection artists={artists} selectedArtist={selectedArtist} setSelectedArtist={setSelectedArtist} artistDetail={artistDetail} reloadDetail={refreshDetail} busy={busy} notify={notify}/> :
           section === "recommendations" ? <RecommendationsSection recommendations={recommendations} reload={reloadRecommendations} notify={notify}/> :
-          <SettingsSection sources={sources} setSources={setSources} settings={settings} setSettings={setSettings} onSaveSources={onSaveSources} onSaveSettings={onSaveSettings} savingSources={savingSources} savingSettings={savingSettings} notify={notify}/>}
+          <SettingsSection sources={sources} setSources={setSources} settings={settings} setSettings={setSettings} automation={automation} onSaveSources={onSaveSources} onSaveSettings={onSaveSettings} savingSources={savingSources} savingSettings={savingSettings} notify={notify}/>}
       </div>
-      <footer className="app-footer"><span>BREAKOUT RADAR <b>v3.0</b></span><span>Evidence first. People decide.</span><span>{health?.authentication || "Local environment"}</span></footer>
+      <footer className="app-footer"><span>BREAKOUT RADAR <b>v3.1</b></span><span>Evidence first. People decide.</span><span>{health?.authentication || "Local environment"}</span></footer>
     </main>
     {toast && <div className={`toast toast-${toast.tone}`} role="status"><span className="toast-mark"><Icon name={toast.tone === "error" ? "x" : "check"} size={14}/></span>{toast.message}<button className="icon-btn" onClick={() => setToast(null)}><Icon name="x" size={14}/></button></div>}
   </div>;
