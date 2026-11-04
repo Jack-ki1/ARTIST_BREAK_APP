@@ -337,26 +337,16 @@ export default function App() {
     setDiscoveryResults([]);
     setDiscoveryCount(null);
     try {
-      const matches = new Map();
-      const resultErrors = [];
-      const searchAreas = areas.length ? areas : [""];
-      const searchGenres = genres.length ? genres : [""];
-      for (const area of searchAreas) {
-        for (const genre of searchGenres) {
-          const result = await searchArtists({
-            query: queryText,
-            area,
-            genre,
-            limit: preferences.limit,
-            offset: 0,
-          });
-          for (const candidate of result.items) matches.set(candidate.id, candidate);
-          resultErrors.push(...(result.errors || []));
-        }
-      }
-      setDiscoveryResults([...matches.values()]);
-      setDiscoveryCount(matches.size);
-      setDiscoveryError(resultErrors.join(" · "));
+      const result = await searchArtists({
+        query: queryText,
+        areas,
+        genres,
+        limit: preferences.limit,
+        offset: 0,
+      });
+      setDiscoveryResults(result.items || []);
+      setDiscoveryCount(result.count ?? (result.items || []).length);
+      setDiscoveryError((result.errors || []).join(" · "));
     } catch (requestError) {
       setDiscoveryError(requestError.message);
     } finally {
