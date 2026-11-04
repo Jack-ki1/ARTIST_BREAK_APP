@@ -181,7 +181,7 @@ def update_providers(
     unknown_ids = sorted(set(enabled_ids) - specs.keys())
     if unknown_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown provider IDs: {', '.join(unknown_ids)}",
         )
 
@@ -199,14 +199,14 @@ def update_providers(
     for provider_id, values in payload.credential_updates.items():
         if provider_id not in specs:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Unknown provider ID: {provider_id}",
             )
         allowed_fields = {field["key"] for field in specs[provider_id]["fields"]}
         unknown_fields = sorted(set(values) - allowed_fields)
         if unknown_fields:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Unknown credential fields for {provider_id}: {', '.join(unknown_fields)}",
             )
         for key, value in values.items():
@@ -217,7 +217,7 @@ def update_providers(
     for credential_key in payload.clear_credentials:
         if "." not in credential_key:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Credential keys must use provider_id.field_name",
             )
         provider_id, field_name = credential_key.split(".", 1)
@@ -226,7 +226,7 @@ def update_providers(
             or field_name not in {field["key"] for field in specs[provider_id]["fields"]}
         ):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Unknown credential field: {credential_key}",
             )
         credentials.pop(credential_key, None)
@@ -295,7 +295,7 @@ async def discover_artists(
     genres = list(dict.fromkeys(value.strip() for value in genre if value.strip()))
     if not any((query_text, areas, genres)):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Enter an artist, region, or genre to search the enabled providers",
         )
 
@@ -303,7 +303,7 @@ async def discover_artists(
     genre_filters = genres or [None]
     if len(area_filters) * len(genre_filters) > 25:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="A search can include at most 25 region/genre combinations",
         )
 
@@ -333,7 +333,7 @@ async def discover_artists(
             max_provider_calls = 100
         if estimated_calls > max_provider_calls:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"This filter/provider combination would make about {estimated_calls} "
                     "upstream requests. Reduce regions, genres, or enabled providers; "
