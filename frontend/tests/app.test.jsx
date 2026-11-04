@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App.jsx";
-import { createArtist } from "../src/api.js";
+import { createArtist, searchArtists } from "../src/api.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let root;
@@ -278,6 +278,27 @@ describe("artist workspace", () => {
     expect(fetchMock.mock.calls.some(([, options]) =>
       options?.method === "GET" && options?.headers?.Authorization,
     )).toBe(false);
+  });
+
+
+  it("sends multiple regions and genres in one discovery request", async () => {
+    const fetchMock = vi.fn(async () => response({ items: [], count: 0, offset: 0, errors: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await searchArtists({
+      query: "new act",
+      areas: ["Kenya", "Ghana"],
+      genres: ["Afrobeats", "Alternative R&B"],
+      limit: 5,
+      offset: 0,
+    });
+
+    const [url] = fetchMock.mock.calls[0];
+    const params = new URL(url, "http://localhost").searchParams;
+    expect(params.get("query")).toBe("new act");
+    expect(params.getAll("area")).toEqual(["Kenya", "Ghana"]);
+    expect(params.getAll("genre")).toEqual(["Afrobeats", "Alternative R&B"]);
+    expect(params.get("limit")).toBe("5");
   });
 
   it("sends only submitted identity fields to the backend", async () => {
