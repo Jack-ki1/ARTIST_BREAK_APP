@@ -57,7 +57,7 @@ encryption keys, or local database content.
 
 GitHub Actions run `41801165096` completed successfully on the rebuild branch:
 
-- Backend: 22 tests passed, with no pytest deprecation warnings.
+- Backend: 23 tests passed, with no pytest deprecation warnings.
 - Frontend: 8 tests passed.
 - Vite 8.3.5 production build completed successfully.
 - Release packaging job rebuilt the production frontend, assembled the source
