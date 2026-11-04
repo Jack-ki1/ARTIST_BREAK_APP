@@ -4,6 +4,7 @@
 Workspace                          Python FastAPI
   React + Vite                      app/main.py (API routes)
   src/api.js ── HTTP /api/* ─────►  app/providers.py (multi-provider search adapters)
+                                    app/quotas.py (persistent daily provider budgets)
   Settings                          app/secrets.py (encrypted provider credentials)
   src/App.jsx                       app/scheduler.py (15-minute discovery loop)
                                     app/schemas.py (Pydantic models)
@@ -31,6 +32,8 @@ There are no metric, score, recommendation, or audience-history tables. The API 
 - Discovery settings are persisted in the database. While the API process is running, its scheduler searches each configured region/genre combination every 15 minutes; the browser is not required to remain open.
 - Provider selections are stored in the database. Provider credentials are encrypted with Fernet using `PROVIDER_SECRETS_KEY`; that key must be backed up separately from the database.
 - Provider status distinguishes enabled/disabled from credential readiness. Search calls return provider-specific errors rather than claiming success for unconfigured integrations.
+- The scheduler enforces a per-cycle upstream request ceiling and skips providers that lack required credentials.
+- YouTube search.list requests reserve a durable daily quota entry in `provider_daily_usage` before transmission; failed requests are counted conservatively.
 - The in-process scheduler and MusicBrainz rate limiter assume one backend worker. Multi-worker deployment requires a dedicated scheduler and shared rate limiting.
 - Authentication is not configured. The API binds to loopback by default and must not be exposed publicly.
 - `GET /api/health` discloses the authentication mode and configured provider list; `GET /api/providers` describes implemented and unavailable integrations.
