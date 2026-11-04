@@ -1,0 +1,35 @@
+name: Apply Discovery scan fix
+on:
+  push:
+    branches:
+      - automation/v3.1-reference-refresh-20261104
+permissions:
+  contents: write
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Fix button callback and clean staging files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("frontend/src/App.jsx")
+          source = p.read_text()
+          old = '<button className="btn btn-primary scan-button" onClick={onRun} disabled={running}>'
+          new = '<button className="btn btn-primary scan-button" onClick={() => onRun()} disabled={running}>'
+          if old not in source:
+              raise SystemExit("Expected Discovery button binding not found")
+          p.write_text(source.replace(old, new, 1))
+          PY
+          rm -f .github/workflows/apply-discovery-scan-fix.yml
+          rm -f docs/CI_RECOVERY_NOTE.md
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Fix Discovery click handler event payload"
+          git push origin HEAD:${GITHUB_REF_NAME}
