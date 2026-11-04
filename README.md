@@ -381,7 +381,7 @@ Acceptance is explicit.
 
 ### Backend
 
-- Python 3.11 or later (the current CI baseline is Python 3.13).
+- Python 3.11 or later (the current CI baseline is Python 3.13); `tzdata` supplies IANA zone rules on Windows.
 - `pip` for installing dependencies.
 - Network access to the selected external provider APIs.
 
