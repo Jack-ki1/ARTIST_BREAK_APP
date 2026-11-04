@@ -346,3 +346,10 @@ input[type=range] { width: 100%; accent-color: var(--lime); cursor: pointer; }
   .settings-actions { align-items: flex-start; flex-direction: column; }.settings-actions .btn { width: 100%; }
   .app-footer { padding: 12px 14px; }.app-footer span:last-child { display: none; }
 }
+
+.timeline-chart { margin-top: 16px; padding: 12px 12px 8px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-soft); }
+.timeline-chart > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.timeline-chart > div:first-child span { color: var(--text-soft); font-size: 9px; font-weight: 900; }
+.timeline-chart > div:first-child small { color: var(--muted); font-size: 8px; text-align: right; }
+.timeline-chart svg { width: 100%; height: 112px; overflow: visible; display: block; margin-top: 6px; }
+.timeline-chart > div:last-child { display: flex; justify-content: space-between; color: var(--muted); font-size: 8px; }
