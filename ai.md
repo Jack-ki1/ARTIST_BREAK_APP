@@ -16,7 +16,7 @@ encryption keys, or local database content.
 - The backend API has no caller authentication and must remain on loopback or
   behind a trusted access-controlled network.
 
-## Rebuild changes in progress
+## Rebuild changes completed and CI-verified
 
 - Raised the supported frontend runtime to Node 24.15+ and upgraded GitHub
   Actions to Node 24-compatible action releases.
@@ -37,7 +37,7 @@ encryption keys, or local database content.
 - Updated CI to package the tested source and production frontend into a
   downloadable `ARTIST_BREAK_APP.zip` artifact after the test jobs pass.
 
-## Remaining production work
+## Remaining production work (not included in this rebuild)
 
 - Add Alembic migrations and deployment-safe schema upgrades.
 - Operate scheduled collection in a separate durable worker with distributed
@@ -53,6 +53,18 @@ encryption keys, or local database content.
 - Evaluate audio models only against audio the project has permission to
   process and licences compatible with the intended deployment.
 
-The GitHub Actions workflow is the source of truth for build/test status. Do not
-mark the rebuild as verified until the backend tests, frontend tests,
-production build, and ZIP artifact validation have all succeeded.
+## Verification
+
+GitHub Actions run `41801165096` completed successfully on the rebuild branch:
+
+- Backend: 22 tests passed, with no pytest deprecation warnings.
+- Frontend: 8 tests passed.
+- Vite 8.3.5 production build completed successfully.
+- Release packaging job rebuilt the production frontend, assembled the source
+  archive, passed `unzip -t`, and uploaded artifact `13306734941`.
+- The downloaded project ZIP was independently checked: 68 archive entries,
+  valid ZIP integrity, includes frontend production assets, and contains no
+  `.env`, local databases, `node_modules`, or virtual environments.
+
+The branch is available in pull request #1. The main branch has not been
+modified or merged.
