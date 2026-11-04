@@ -127,7 +127,7 @@ def test_discovery_groups_cross_source_results_and_accepts_artist(client, monkey
             "genres": ["Alternative R&B"],
             "bio": "Independent Nairobi vocalist.",
             "image_url": None,
-            "metrics": {},
+            "metrics": {"fans": 120, "albums": 2} if source_id == "itunes" else {},
             "context": {"query": query},
         }]
 
@@ -164,6 +164,16 @@ def test_discovery_groups_cross_source_results_and_accepts_artist(client, monkey
 
     detail = http.get(f"/api/artists/{artist['id']}").json()
     assert len(detail["identities"]) == 2
+    assert len(detail["observations"]) == 2
+
+    # A later scan appends to the accepted artist's source-specific history.
+    second = http.post("/api/discovery/run", json={
+        "query": "Nia K", "source_ids": ["itunes", "musicbrainz"], "limit": 10,
+    })
+    assert second.status_code == 200
+    assert second.json()["candidates_found"] == 0
+    refreshed = http.get(f"/api/artists/{artist['id']}").json()
+    assert len(refreshed["observations"]) == 4
 
 
 def test_artistic_review_is_separate_from_discovery_and_recommendation(client):
