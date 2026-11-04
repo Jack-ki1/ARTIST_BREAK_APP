@@ -325,13 +325,19 @@ async def discover_artists(
             * len(genre_filters)
             * ready_provider_count
         )
-        if estimated_calls > 100:
+        try:
+            max_provider_calls = max(
+                1, int(os.getenv("MAX_PROVIDER_CALLS_PER_SEARCH", "100"))
+            )
+        except ValueError:
+            max_provider_calls = 100
+        if estimated_calls > max_provider_calls:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
                     f"This filter/provider combination would make about {estimated_calls} "
                     "upstream requests. Reduce regions, genres, or enabled providers; "
-                    "the per-search safety limit is 100."
+                    f"the per-search safety limit is {max_provider_calls}."
                 ),
             )
 
