@@ -1,6 +1,7 @@
 """Provider request budgets backed by a durable database ledger."""
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import logging
 import os
 from collections.abc import Callable
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 # Leave a safety margin below YouTube's standard 100 search.list calls/day.
 # Operators with a different approved quota can tune this through the environment.
 DEFAULT_YOUTUBE_DAILY_BUDGET = 80
+YOUTUBE_QUOTA_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 
 def daily_provider_budget(provider_id: str) -> int | None:
@@ -49,7 +51,8 @@ def claim_provider_call(
         return True
 
     request_time = now or datetime.now(timezone.utc)
-    usage_date = request_time.astimezone(timezone.utc).date().isoformat()
+    # Google resets YouTube daily quotas at midnight Pacific Time, including DST.
+    usage_date = request_time.astimezone(YOUTUBE_QUOTA_TIMEZONE).date().isoformat()
 
     try:
         with session_factory() as session:
