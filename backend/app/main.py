@@ -13,6 +13,7 @@ from app.database import SessionLocal, create_database_tables, engine, get_db
 from app.models import Artist, DiscoveryCandidate, DiscoveryConfiguration, ProviderConfiguration
 from app.providers import (
     PROVIDER_CATALOG,
+    expand_area_filter,
     provider_status,
     search_enabled_providers,
     search_provider,
@@ -283,24 +284,29 @@ def update_discovery_settings(
 @app.get("/api/discovery/search", response_model=DiscoveryPage)
 async def discover_artists(
     query: str | None = Query(default=None, min_length=1, max_length=120),
-    area: str | None = Query(default=None, min_length=1, max_length=120),
-    genre: str | None = Query(default=None, min_length=1, max_length=120),
+    area: list[str] = Query(default=[]),
+    genre: list[str] = Query(default=[]),
     limit: int = Query(default=10, ge=1, le=25),
     offset: int = Query(default=0, ge=0, le=1000),
     db: Session = Depends(get_db),
 ) -> DiscoveryPage:
-    filters = {
-        "query": query.strip() if query else None,
-        "area": area.strip() if area else None,
-        "genre": genre.strip() if genre else None,
-        "limit": limit,
-        "offset": offset,
-    }
-    if not any((filters["query"], filters["area"], filters["genre"])):
+    query_text = query.strip() if query else None
+    areas = list(dict.fromkeys(value.strip() for value in area if value.strip()))
+    genres = list(dict.fromkeys(value.strip() for value in genre if value.strip()))
+    if not any((query_text, areas, genres)):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Enter an artist, region, or genre to search the enabled providers",
         )
+
+    area_filters = areas or [None]
+    genre_filters = genres or [None]
+    if len(area_filters) * len(genre_filters) > 25:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A search can include at most 25 region/genre combinations",
+        )
+
     try:
         configuration = db.get(ProviderConfiguration, 1)
         enabled_provider_ids = (
@@ -309,10 +315,41 @@ async def discover_artists(
         credentials = decrypt_credentials(
             configuration.encrypted_credentials if configuration else None
         )
+        configured_providers = provider_status(enabled_provider_ids, credentials)
+        ready_provider_count = sum(
+            1 for item in configured_providers
+            if item["enabled"] and item["configured"]
+        )
+        estimated_calls = (
+            sum(len(expand_area_filter(area_value)) for area_value in area_filters)
+            * len(genre_filters)
+            * ready_provider_count
+        )
+        if estimated_calls > 100:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"This filter/provider combination would make about {estimated_calls} "
+                    "upstream requests. Reduce regions, genres, or enabled providers; "
+                    "the per-search safety limit is 100."
+                ),
+            )
+
+        search_filters = {
+            "query": query_text,
+            "area": areas[0] if len(areas) == 1 else None,
+            "genre": genres[0] if len(genres) == 1 else None,
+            "limit": limit,
+            "offset": offset,
+            "areas": areas if len(areas) > 1 else None,
+            "genres": genres if len(genres) > 1 else None,
+        }
+        if "youtube" in enabled_provider_ids:
+            search_filters["quota_session_factory"] = SessionLocal
         result = await search_enabled_providers(
             enabled_provider_ids,
             credentials,
-            **filters,
+            **search_filters,
         )
     except RuntimeError as exc:
         logger.exception("Could not run configured discovery providers")
