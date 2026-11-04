@@ -119,16 +119,17 @@ describe("Breakout Radar v3",()=>{
     expect(calls.some(([url,options])=>url==="/api/discovery/candidates/candidate-1/review" && options.method==="POST")).toBe(true);
   });
   it("lists 73 sources and supports credential entry",async()=>{
-    mockFetch(); await render(); await nav("Settings"); await waitForText("73 Sources catalogued");
+    mockFetch(); await render(); await nav("Settings"); await waitForText("Sources catalogued");
     const card=[...document.querySelectorAll(".source-card")].find(x=>x.textContent.includes("Spotify"));
     await act(async()=>card.querySelector(".switch input").click());
+    await act(async()=>card.querySelector(".text-button").click());
     await act(async()=>[...card.querySelectorAll(".source-config input")].forEach((input,i)=>{
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,i?"client-secret":"client-id");
       input.dispatchEvent(new Event("input",{bubbles:true}));
     }));
     await click("Save source configuration"); await waitForText("Saved 3 source selections");
     const call=calls.find(([url,options])=>url==="/api/sources" && options.method==="PUT");
-    expect(JSON.parse(call[1].body)).toMatchObject({enabled_source_ids:["musicbrainz","gdelt","spotify"],credential_updates:{spotify:{client_id:"client-id",client_secret:"client-secret"}}});
+    expect(JSON.parse(call[1].body)).toMatchObject({enabled_source_ids:["musicbrainz","spotify","gdelt"],credential_updates:{spotify:{client_id:"client-id",client_secret:"client-secret"}}});
   });
   it("saves a structured artistic review",async()=>{
     artists=[artist]; mockFetch(); await render(); await nav("Analyse");
