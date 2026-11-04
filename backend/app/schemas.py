@@ -20,7 +20,7 @@ class DiscoveryRunRequest(StrictModel):
 
 
 class SourceSettingsWrite(StrictModel):
-    enabled_source_ids: list[str] = Field(default_factory=list, max_length=69)
+    enabled_source_ids: list[str] = Field(default_factory=list, max_length=73)
     credential_updates: dict[str, dict[str, str]] = Field(default_factory=dict)
     clear_credentials: list[str] = Field(default_factory=list)
 
