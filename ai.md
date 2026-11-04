@@ -20,7 +20,7 @@ encryption keys, or local database content.
 
 - Raised the supported frontend runtime to Node 24.15+ and upgraded GitHub
   Actions to Node 24-compatible action releases.
-- Added a persistent per-UTC-day request ledger for YouTube search.list calls.
+- Added a persistent per-Pacific-day request ledger for YouTube search.list calls.
   The default budget is 80 to leave headroom below the standard 100-call
   allocation; operators can configure the budget for their approved project.
 - Added bounded retries with Retry-After support for transient provider errors.
