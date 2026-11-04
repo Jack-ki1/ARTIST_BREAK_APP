@@ -24,6 +24,12 @@ ARTISTIC_WEIGHTS = {
 }
 DEFAULT_SETTINGS = {
     "region_focus": "africa",
+    "discovery_seeds": [
+        "Kenyan emerging artists", "East African new music", "Bongo Flava",
+        "Kenyan hip hop", "Ugandan alternative music", "Rwandan music",
+        "Ghanaian Afrobeats", "Nigerian alternative music", "African R&B",
+        "Zambian music", "Ethiopian new music", "African amapiano",
+    ],
     "countries": ["KE", "TZ", "UG", "RW", "NG", "GH", "ZA", "ZM", "ET"],
     "genres": [],
     "min_sources_for_candidate": 2,
