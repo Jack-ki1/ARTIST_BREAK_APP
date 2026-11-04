@@ -14,7 +14,7 @@ Enter credentials in **Settings → Data providers**. Credentials are encrypted 
 
 MusicBrainz, Wikidata, and Deezer do not require credentials for the implemented search paths. MusicBrainz requests are serialized and limited to about one request per second; configure a maintainer-owned `MUSICBRAINZ_CONTACT` URL or email. Other providers require the relevant API key, application credentials, or access token; Audius requires an application name.
 
-The application reserves YouTube `search.list` requests in a persistent UTC-day ledger. The default budget is 80 calls per day, leaving headroom below the standard 100-call daily allocation; override it only after verifying the quota assigned to the configured Google Cloud project. The manual API also rejects requests estimated to exceed 100 upstream calls, and scheduled discovery defaults to 100 provider calls per cycle. These safeguards cover the documented YouTube search quota and unbounded fan-out; they do not automatically enforce undocumented or account-specific quotas for every other integration.
+The application reserves YouTube `search.list` requests in a persistent Pacific Time day ledger. The default budget is 80 calls per day, leaving headroom below the standard 100-call daily allocation; override it only after verifying the quota assigned to the configured Google Cloud project. The manual API also rejects requests estimated to exceed 100 upstream calls, and scheduled discovery defaults to 100 provider calls per cycle. These safeguards cover the documented YouTube search quota and unbounded fan-out; they do not automatically enforce undocumented or account-specific quotas for every other integration.
 
 ## Scheduled and manual discovery
 
