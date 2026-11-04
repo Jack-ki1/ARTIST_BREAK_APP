@@ -165,6 +165,19 @@ class ArtistDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
+class SourceDailyUsage(Base):
+    """Daily per-source request ledger; YouTube uses Google's Pacific reset day."""
+
+    __tablename__ = "radar_source_daily_usage"
+    __table_args__ = (UniqueConstraint("source_id", "quota_date", name="uq_radar_source_quota_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    quota_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
 class SourceConfiguration(Base):
     __tablename__ = "radar_source_configuration"
 
