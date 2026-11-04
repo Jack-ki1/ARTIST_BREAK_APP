@@ -33,6 +33,11 @@ def client(monkeypatch):
     monkeypatch.setattr(main, "engine", test_engine)
     monkeypatch.setattr(main, "SessionLocal", test_sessions)
     monkeypatch.setattr(main, "create_database_tables", lambda: Base.metadata.create_all(test_engine))
+
+    async def disable_background_scheduler(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(main, "run_discovery_scheduler", disable_background_scheduler)
     main.app.dependency_overrides[get_db] = override_get_db
     with TestClient(main.app) as test_client:
         yield test_client
