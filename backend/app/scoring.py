@@ -6,12 +6,12 @@ from math import log1p
 from statistics import mean
 
 DISCOVERY_WEIGHTS = {
-    "momentum": 0.30,
-    "independent_breadth": 0.25,
-    "release_activity": 0.15,
-    "live_activity": 0.10,
-    "search_interest": 0.10,
-    "catalogue_headroom": 0.10,
+    "momentum": 30,
+    "independent_breadth": 25,
+    "release_activity": 15,
+    "live_activity": 10,
+    "search_interest": 10,
+    "catalogue_headroom": 10,
 }
 ARTISTIC_WEIGHTS = {
     "songwriting": 2.0,
@@ -57,7 +57,7 @@ def growth_percent(first: float, last: float, days: float) -> float | None:
     return round(((1 + daily_rate) ** 30 - 1) * 100, 2)
 
 
-def source_momentum(observations: list[dict], metric: str) -> float | None:
+def source_momentum(observations: list[dict], metric: str, min_days: float = 7) -> float | None:
     """A 0–100 momentum index for one source+metric, requiring two observations.
 
     The value is not a cross-platform count. It uses the relative change inside
@@ -76,7 +76,7 @@ def source_momentum(observations: list[dict], metric: str) -> float | None:
                 datetime.fromisoformat(str(first["observed_at"]).replace("Z", "+00:00"))).total_seconds() / 86400
     except (ValueError, TypeError, KeyError):
         return None
-    change = growth_percent(a, b, days)
+    change = growth_percent(a, b, max(0, days)) if days >= min_days else None
     if change is None:
         return None
     # 0% growth -> 50 index; +100%/30d -> 100; -100% -> 0.
