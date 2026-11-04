@@ -19,7 +19,7 @@ const config = {
   discovery_weights: { momentum: 30, independent_breadth: 25, release_activity: 15, live_activity: 10, search_interest: 10, catalogue_headroom: 10 },
   artistic_weights: { songwriting: 2, vocals: 2, melody: 1.5, production: 1, originality: 1.5, performance: 1, identity: 1 },
   artistic_share: 60, tier_rules: { pursue_artistic: 78, pursue_combined: 75, meet_artistic: 68, meet_combined: 65, watch_combined: 48 },
-  emerging_limits: { max_catalog_releases: 35, max_known_follower_count: 500000 }, auto_discovery_enabled: false,
+  emerging_limits: { max_catalog_releases: 35, max_known_follower_count: 500000 }, auto_discovery_enabled: false, auto_evidence_enabled: true, auto_discovery_interval_hours: 6, auto_evidence_interval_hours: 24,
 };
 function sourceList() {
   const names = [
@@ -44,7 +44,8 @@ function mockFetch() {
   calls=[];
   vi.stubGlobal("fetch",vi.fn(async (url,options={})=>{
     const path=String(url), method=options.method||"GET"; calls.push([path,options]);
-    if(path==="/api/health") return response({status:"ok",database:"connected",version:"3.0.0",authentication:"disabled — loopback only",source_count:73});
+    if(path==="/api/health") return response({status:"ok",database:"connected",version:"3.1.0",authentication:"disabled — loopback only",source_count:73});
+    if(path==="/api/automation/status") return response({worker_online:true,state:"idle",last_seen_at:new Date().toISOString(),last_discovery_at:null,last_evidence_at:null,next_discovery_at:null,last_error:null,discovery_enabled:true,evidence_enabled:true,interval_hours:12});
     if(path==="/api/dashboard") return response(dashboard);
     if(path==="/api/sources" && method==="PUT") {
       const body=JSON.parse(options.body);
@@ -102,7 +103,23 @@ describe("Breakout Radar v3",()=>{
       .toEqual(["Discovery","Analyse","Recommendations","Settings"]);
     await nav("Analyse"); await waitForText("Understand the whole artist.");
     await nav("Recommendations"); await waitForText("Turn signals into");
-    await nav("Settings"); await waitForText("Configure your");
+    await nav("Settings"); await waitForText("Workspace settings");
+  });
+  it("uses the light reference-aligned workspace and shows real worker state",async()=>{
+    mockFetch(); await render(); await nav("Settings"); await waitForText("Data providers · 73");
+    expect(document.querySelector(".global-search input").placeholder).toBe("Search artist, city, genre...");
+    expect(document.querySelector(".source-grid")).not.toBeNull();
+    expect(document.querySelectorAll(".source-card").length).toBe(73);
+    expect(document.querySelector(".automation-indicator").textContent).toContain("Worker online");
+  });
+  it("submits the global search directly to the discovery API",async()=>{
+    mockFetch(); await render();
+    const input=document.querySelector(".global-search input");
+    await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"Nairobi alternative R&B");input.dispatchEvent(new Event("input",{bubbles:true}));});
+    await act(async()=>document.querySelector(".global-search").dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})));
+    await waitForText("Scan complete");
+    const call=calls.find(([url,options])=>url==="/api/discovery/run" && options.method==="POST");
+    expect(JSON.parse(call[1].body)).toMatchObject({query:"Nairobi alternative R&B",limit:20});
   });
   it("runs discovery with enabled identity-search sources",async()=>{
     mockFetch(); await render();
@@ -119,7 +136,7 @@ describe("Breakout Radar v3",()=>{
     expect(calls.some(([url,options])=>url==="/api/discovery/candidates/candidate-1/review" && options.method==="POST")).toBe(true);
   });
   it("lists 73 sources and supports credential entry",async()=>{
-    mockFetch(); await render(); await nav("Settings"); await waitForText("Sources catalogued");
+    mockFetch(); await render(); await nav("Settings"); await waitForText("Data providers · 73");
     const card=[...document.querySelectorAll(".source-card")].find(x=>x.textContent.includes("Spotify"));
     await act(async()=>card.querySelector(".switch input").click());
     await act(async()=>card.querySelector(".text-button").click());

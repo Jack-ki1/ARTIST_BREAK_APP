@@ -25,7 +25,7 @@ from app.integrations import collect_artist_evidence, search_identity_source
 from app.models import (
     Artist, ArtistCandidate, ArtistDecision, ArtistIdentity, ArtistObservation,
     ArtisticReview, AppAlert, DiscoveryRun, RadarSettings, SourceConfiguration,
-    SourceDailyUsage, SourceEvidence, utc_now,
+    SourceDailyUsage, SourceEvidence, WorkerHeartbeat, utc_now,
 )
 from app.schemas import (
     ArtistCreate, CandidateReview, DecisionCreate, DiscoveryRunRequest,
@@ -44,7 +44,7 @@ from app.source_catalog import (
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 DEFAULT_SOURCES = ["musicbrainz", "deezer", "wikidata", "wikipedia", "itunes", "bluesky", "gdelt"]
 IDENTITY_SOURCE_IDS = IMPLEMENTED_IDS - EVIDENCE_IMPLEMENTED_IDS
 EVIDENCE_SOURCE_IDS = EVIDENCE_IMPLEMENTED_IDS
@@ -234,7 +234,7 @@ def _recompute_artist(db: Session, artist: Artist, settings: dict) -> None:
         series[(row["source_id"], row["metric"])].append(row)
     growths = []
     for (_source, metric), points in series.items():
-        if metric in {"followers", "fans", "subscribers"}:
+        if metric in {"followers", "fans", "subscribers", "listeners"}:
             momentum = source_momentum(points, metric, float(settings.get("min_observation_days", 7)))
             if momentum is not None:
                 growths.append(momentum)
@@ -266,7 +266,7 @@ def _metric_observations(db: Session, artist_id: str, source_id: str, metrics: d
         if not isinstance(value, (int, float)) or value < 0:
             continue
         metric = key.strip().lower().replace(" ", "_")[:80]
-        if metric not in {"followers", "fans", "subscribers", "views", "releases_12m", "albums", "events_12m", "live_events", "tracks"}:
+        if metric not in {"followers", "fans", "subscribers", "listeners", "views", "releases_12m", "albums", "events_12m", "live_events", "tracks"}:
             continue
         db.add(ArtistObservation(
             artist_id=artist_id, source_id=source_id, metric=metric,
@@ -508,8 +508,7 @@ def list_candidates(
     return {"items": grouped[:limit], "total": len(grouped), "sources_scanned": sorted({x.source_id for x in rows})}
 
 
-@app.post("/api/discovery/run", response_model=DiscoveryRunResponse)
-async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_db)) -> dict:
+async def _run_discovery(payload: DiscoveryRunRequest, db: Session, run_kind: str | None = None) -> dict:
     enabled, credentials = _source_config(db)
     settings = _settings(db)
     available = {
@@ -526,10 +525,23 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
             detail="No ready identity-search sources are enabled. Configure at least one public source or add the required API credentials in Settings.",
         )
 
-    seeds = [payload.query.strip()] if payload.query and payload.query.strip() else list(settings.get("discovery_seeds", SEEDS))[:2]
-    if not seeds:
-        seeds = SEEDS[:2]
-    run = DiscoveryRun(kind="manual" if payload.query else "discovery", status="running",
+    manual_query = bool(payload.query and payload.query.strip())
+    all_seeds = [payload.query.strip()] if manual_query else list(settings.get("discovery_seeds", SEEDS))
+    if not all_seeds:
+        all_seeds = list(SEEDS)
+    # Respect the global request ceiling while rotating through the configured
+    # seed list. A large provider selection must not starve the final markets.
+    max_requests = max(1, int(os.getenv("MAX_PROVIDER_CALLS_PER_SEARCH", "100")))
+    max_seeds = max(1, max_requests // max(1, len(requested)))
+    if manual_query:
+        seeds = all_seeds[:1]
+    else:
+        offset = int(settings.get("seed_rotation_offset", 0)) % len(all_seeds)
+        rotated = all_seeds[offset:] + all_seeds[:offset]
+        seeds = rotated[:max_seeds]
+        settings["seed_rotation_offset"] = (offset + len(seeds)) % len(all_seeds)
+        _save_settings(db, settings)
+    run = DiscoveryRun(kind=run_kind or ("manual" if payload.query else "discovery"), status="running",
                        query=payload.query, sources_attempted=requested)
     db.add(run)
     db.commit()
@@ -551,15 +563,6 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
             )
             return source_id, term, results
 
-    estimated_requests = len(requested) * len(seeds)
-    max_requests = max(1, int(os.getenv("MAX_PROVIDER_CALLS_PER_SEARCH", "100")))
-    if estimated_requests > max_requests:
-        db.delete(run)
-        db.commit()
-        raise HTTPException(
-            status_code=422,
-            detail=f"Search would start {estimated_requests} upstream requests; maximum is {max_requests}. Reduce selected sources or discovery seeds.",
-        )
     tasks = []
     for source_id in requested:
         for term in seeds:
@@ -694,6 +697,11 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
         "source_results": source_results, "candidates_found": len(unique_groups),
         "artists_added": 0, "error": None,
     }
+
+
+@app.post("/api/discovery/run", response_model=DiscoveryRunResponse)
+async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_db)) -> dict:
+    return await _run_discovery(payload, db, None)
 
 
 @app.post("/api/discovery/candidates/{candidate_id}/review")
@@ -853,3 +861,28 @@ def mark_alert_read(alert_id: str, db: Session = Depends(get_db)) -> dict:
 async def database_exception_handler(_request, exc: SQLAlchemyError):
     logger.exception("Database operation failed", exc_info=exc)
     return JSONResponse(status_code=500, content={"detail": "Database operation failed"})
+
+
+@app.get("/api/automation/status")
+def automation_status(db: Session = Depends(get_db)) -> dict:
+    heartbeat = db.get(WorkerHeartbeat, 1)
+    now = _now()
+    last_seen = heartbeat.last_seen_at if heartbeat else None
+    if last_seen and last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    online = bool(last_seen and (now - last_seen).total_seconds() <= 120)
+    settings = _settings(db)
+    def iso(value):
+        return value.isoformat() if value else None
+    return {
+        "worker_online": online,
+        "state": heartbeat.state if heartbeat and online else "offline",
+        "last_seen_at": iso(heartbeat.last_seen_at) if heartbeat else None,
+        "last_discovery_at": iso(heartbeat.last_discovery_at) if heartbeat else None,
+        "last_evidence_at": iso(heartbeat.last_evidence_at) if heartbeat else None,
+        "next_discovery_at": iso(heartbeat.next_discovery_at) if heartbeat else None,
+        "last_error": heartbeat.last_error if heartbeat else None,
+        "discovery_enabled": bool(settings.get("auto_discovery_enabled", True)),
+        "evidence_enabled": bool(settings.get("auto_evidence_enabled", True)),
+        "interval_hours": int(settings.get("auto_discovery_interval_hours", 6)),
+    }

@@ -485,12 +485,30 @@ async def search_provider(
                 params={"part": "snippet", "type": "channel", "q": term, "maxResults": min(limit, 50),
                         "key": credentials["api_key"]},
             )
-            return [
-                _normalize("youtube", item["id"]["channelId"], item["snippet"]["channelTitle"],
-                           f"https://www.youtube.com/channel/{item['id']['channelId']}")
-                for item in payload.get("items", [])
-                if item.get("id", {}).get("channelId") and item.get("snippet", {}).get("channelTitle")
-            ]
+            channels = [item for item in payload.get("items", []) if item.get("id", {}).get("channelId") and item.get("snippet", {}).get("channelTitle")]
+            channel_ids = [item["id"]["channelId"] for item in channels]
+            stats_by_id: dict[str, dict] = {}
+            if channel_ids:
+                stats_payload = await _get_json(
+                    client, "https://www.googleapis.com/youtube/v3/channels",
+                    params={"part": "statistics", "id": ",".join(channel_ids), "key": credentials["api_key"]},
+                )
+                stats_by_id = {row.get("id"): row.get("statistics", {}) for row in stats_payload.get("items", []) if row.get("id")}
+            results = []
+            for item in channels:
+                channel_id = item["id"]["channelId"]
+                stats = stats_by_id.get(channel_id, {})
+                metrics = {}
+                if not stats.get("hiddenSubscriberCount") and stats.get("subscriberCount") is not None:
+                    metrics["subscribers"] = int(stats["subscriberCount"])
+                if stats.get("viewCount") is not None:
+                    metrics["views"] = int(stats["viewCount"])
+                if stats.get("videoCount") is not None:
+                    metrics["tracks"] = int(stats["videoCount"])
+                results.append(_normalize("youtube", channel_id, item["snippet"]["channelTitle"],
+                    f"https://www.youtube.com/channel/{channel_id}", metrics=metrics,
+                    disambiguation=item.get("snippet", {}).get("description")))
+            return results
         if provider_id == "apple_music":
             storefront = credentials.get("storefront", "us")
             payload = await _get_json(
@@ -514,7 +532,8 @@ async def search_provider(
             artists = payload.get("results", {}).get("artistmatches", {}).get("artist", [])
             return [
                 _normalize("lastfm", str(item.get("mbid") or item["name"]), item["name"],
-                           item.get("url", f"https://www.last.fm/music/{quote(item['name'])}"))
+                           item.get("url", f"https://www.last.fm/music/{quote(item['name'])}"),
+                           metrics={"listeners": int(item.get("listeners") or 0)} if item.get("listeners") else {})
                 for item in artists if item.get("name")
             ]
         if provider_id == "discogs":
@@ -600,7 +619,8 @@ async def search_provider(
             return [
                 _normalize("soundcloud", str(item["id"]), item["username"],
                            item.get("permalink_url", f"https://soundcloud.com/{item.get('permalink', '')}"),
-                           disambiguation=item.get("description"))
+                           disambiguation=item.get("description"),
+                           metrics={"followers": int(item.get("followers_count") or 0), "tracks": int(item.get("track_count") or 0)})
                 for item in payload.get("collection", payload.get("data", []))
                 if item.get("id") and item.get("username")
             ]

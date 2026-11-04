@@ -9,6 +9,22 @@ Breakout Radar is an Africa-first artist discovery and A&R research workspace. I
 
 The UI borrows the dark, high-contrast, chart-led design language of the pixel-perfect-replica demo. Its data model and operating workflows are a new implementation for this repository.
 
+## Fastest local start (Docker)
+
+The Compose stack starts PostgreSQL, the FastAPI service, the autonomous collection worker and the web UI. The API and UI ports are bound to `127.0.0.1` because authentication and workspace isolation are not implemented yet.
+
+```bash
+cp .env.example .env
+# Generate a Fernet key and paste it into PROVIDER_SECRETS_KEY in .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+docker compose up --build -d
+```
+
+Open `http://127.0.0.1:5173`. Check `http://127.0.0.1:8000/api/automation/status` to confirm that the worker heartbeat is live. `docker compose logs -f worker api` shows collection activity. Stop with `docker compose down`; persistent PostgreSQL data remains in the `radar-postgres` volume. To remove the database as well, use `docker compose down -v`.
+
+The initial configuration enables recurring discovery every 6 hours and evidence refresh every 24 hours. The worker checks settings every 30 seconds. A provider only contributes when its adapter is implemented, enabled, correctly configured, and permitted for the intended use. A `Ready` source means local setup is complete; it does not guarantee the upstream service will accept the next request.
+
+
 ## What is implemented
 
 ### Discovery and source integration

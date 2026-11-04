@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.database import Base, get_db
-from app.models import ArtistCandidate, SourceConfiguration, SourceDailyUsage
+from app.models import ArtistCandidate, SourceConfiguration, SourceDailyUsage, WorkerHeartbeat
 from app.source_catalog import source_catalog, source_ids
 from app.scoring import artistic_overall, discovery_index, recommendation
 
@@ -260,3 +260,87 @@ def test_scoring_does_not_turn_missing_reviews_into_signing_recommendations():
     })
     assert score["score"] > 0
     assert score["confidence"] < 100
+
+
+def test_automation_status_reports_worker_heartbeat_and_autonomous_defaults(client):
+    http, sessions = client
+    status = http.get("/api/automation/status")
+    assert status.status_code == 200
+    payload = status.json()
+    assert payload["discovery_enabled"] is True
+    assert payload["evidence_enabled"] is True
+    assert payload["interval_hours"] == 6
+    assert payload["worker_online"] is False
+
+    from datetime import datetime, timezone
+    with sessions() as session:
+        session.add(WorkerHeartbeat(id=1, state="idle", last_seen_at=datetime.now(timezone.utc)))
+        session.commit()
+    live = http.get("/api/automation/status").json()
+    assert live["worker_online"] is True
+    assert live["state"] == "idle"
+
+
+def test_discovery_processes_all_seed_terms_within_request_budget(client, monkeypatch):
+    http, sessions = client
+    http.put("/api/sources", json={"enabled_source_ids": ["musicbrainz", "itunes"]})
+    http.put("/api/settings", json={"config": {"discovery_seeds": ["Seed A", "Seed B", "Seed C", "Seed D"]}})
+    called = []
+
+    async def fake_search(source_id, query, credentials, limit=10, **kwargs):
+        called.append((source_id, query))
+        return [{
+            "provider_id": source_id, "external_id": f"{source_id}-{query}",
+            "name": f"Artist {query}", "source_url": f"https://example.test/{source_id}/{query}",
+            "country": "KE", "city": "Nairobi", "genres": [], "metrics": {}, "context": {},
+        }]
+
+    monkeypatch.setattr(main, "search_identity_source", fake_search)
+    response = http.post("/api/discovery/run", json={"limit": 5})
+    assert response.status_code == 200, response.text
+    assert len(called) == 8
+    assert {query for _source, query in called} == {"Seed A", "Seed B", "Seed C", "Seed D"}
+
+
+def test_youtube_provider_enriches_channel_search_with_public_statistics(monkeypatch):
+    from app import providers
+
+    async def fake_get_json(_client, url, params=None, headers=None):
+        if url.endswith("/search"):
+            return {"items": [{"id": {"channelId": "channel-1"}, "snippet": {"channelTitle": "Nia K", "description": "Nairobi artist"}}]}
+        if url.endswith("/channels"):
+            return {"items": [{"id": "channel-1", "statistics": {"subscriberCount": "1250", "viewCount": "45000", "videoCount": "16", "hiddenSubscriberCount": False}}]}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(providers, "_get_json", fake_get_json)
+    result = asyncio.run(providers.search_provider(
+        "youtube", query="Nia K", area=None, genre=None, limit=10, credentials={"api_key": "test-key"}
+    ))
+    assert len(result) == 1
+    assert result[0]["name"] == "Nia K"
+    assert result[0]["metrics"] == {"subscribers": 1250, "views": 45000, "tracks": 16}
+
+
+def test_seed_rotation_prevents_later_markets_from_being_starved(client, monkeypatch):
+    http, _sessions = client
+    http.put("/api/sources", json={"enabled_source_ids": ["musicbrainz", "itunes"]})
+    http.put("/api/settings", json={"config": {"discovery_seeds": ["Market A", "Market B", "Market C", "Market D"]}})
+    monkeypatch.setenv("MAX_PROVIDER_CALLS_PER_SEARCH", "4")
+    calls = []
+
+    async def fake_search(source_id, query, credentials, limit=10, **kwargs):
+        calls.append(query)
+        return [{"provider_id": source_id, "external_id": f"{source_id}-{query}", "name": f"{source_id} {query}",
+                 "source_url": f"https://example.test/{source_id}/{query}", "country": "KE", "city": "Nairobi",
+                 "genres": [], "metrics": {}, "context": {}}]
+
+    monkeypatch.setattr(main, "search_identity_source", fake_search)
+    first = http.post("/api/discovery/run", json={"limit": 5})
+    assert first.status_code == 200, first.text
+    first_seeds = set(calls)
+    calls.clear()
+    second = http.post("/api/discovery/run", json={"limit": 5})
+    assert second.status_code == 200, second.text
+    second_seeds = set(calls)
+    assert first_seeds == {"Market A", "Market B"}
+    assert second_seeds == {"Market C", "Market D"}

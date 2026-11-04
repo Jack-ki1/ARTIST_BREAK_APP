@@ -106,3 +106,14 @@ Do not put provider keys in `frontend/`, source control, screenshots or issue co
 Identity metadata includes source ID, external ID, source URL, name and optional profile metadata. Numeric observations are stored with source ID, metric name, scope, timestamp and source URL. Press/community/media records are stored as evidence references. Provider values are not blended into one cross-platform audience total.
 
 Source readiness is a configuration signal, not a live health check. Provider-specific quotas, current access terms, data retention, attribution and commercial rights must be verified before production use.
+
+
+## Automated collection and source constraints
+
+The bundled worker runs discovery every 6 hours by default and refreshes evidence for a bounded batch of accepted artists every 24 hours. It maintains a database heartbeat exposed at `/api/automation/status`; the UI polls for new queue entries and worker state every minute. Seed terms rotate when the provider/request ceiling prevents a full seed sweep in one cycle.
+
+The worker is included as a separate container in `docker-compose.yml`; the API process does not silently start multiple copies of it. Run one worker per database until a distributed scheduler/lock is deployed. Scheduled operation requires the worker container to stay running and the relevant sources to be enabled, configured and permitted.
+
+Provider restrictions affect the design: MusicBrainz clients must remain at or below one request per second; YouTube `search.list` has a separate default bucket of 100 calls per day and this app uses a lower configurable local budget; Spotify Development Mode is not treated as a scalable audience analytics feed; TikTok Research Tools require a qualified researcher and approved research project; Reddit commercial product usage needs prior permission and a contract. These limitations are shown in source notes and are not bypassed by this application.
+
+YouTube search now enriches public channel identities using the official `channels.list` statistics part when available, recording subscriber and view observations as separate YouTube series. Hidden subscriber counts remain missing. Last.fm listener counts and SoundCloud public follower/track counts are likewise kept under their own source identifiers; no cross-platform audience sum is calculated.
