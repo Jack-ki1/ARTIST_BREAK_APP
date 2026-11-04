@@ -540,10 +540,6 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
                 key.removeprefix(source_id + "."): value
                 for key, value in credentials.items() if key.startswith(source_id + ".")
             }
-            if not _claim_source_request(db, source_id):
-                raise RuntimeError(
-                    f"{source_id}: daily request budget exhausted; Google quota resets at midnight Pacific Time"
-                )
             results = await search_identity_source(
                 source_id, term, source_credentials, limit=payload.limit,
                 country=payload.country, genre=payload.genre,
@@ -559,7 +555,16 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
             status_code=422,
             detail=f"Search would start {estimated_requests} upstream requests; maximum is {max_requests}. Reduce selected sources or discovery seeds.",
         )
-    tasks = [query_one(source_id, term) for source_id in requested for term in seeds]
+    tasks = []
+    for source_id in requested:
+        for term in seeds:
+            if not _claim_source_request(db, source_id):
+                source_results[source_id] = {
+                    "status": "quota_exhausted",
+                    "error": "Daily YouTube search budget exhausted; quota resets at midnight Pacific Time."
+                }
+                continue
+            tasks.append(query_one(source_id, term))
     results = await asyncio.gather(*tasks, return_exceptions=True)
     unique_groups: set[str] = set()
     candidates_written = 0
