@@ -14,10 +14,8 @@ test:
 	(cd frontend && $(NODE) test)
 
 lint:
-	@echo "Running lint checks..."
-	(cd backend && $(PYTHON) -m ruff check . || true)
-	(cd frontend && $(NODE) exec eslint . || true)
-
+	@command -v pre-commit >/dev/null 2>&1 || { echo "pre-commit is required; install it with python -m pip install pre-commit"; exit 127; }
+	pre-commit run --all-files
 migrate:
 	@echo "Database migrations are managed in backend/ via Alembic when configured."
 	@echo "No automatic migration step is defined in this repo yet."
