@@ -114,9 +114,15 @@ def test_provider_aggregation_batches_filters_and_deduplicates(monkeypatch):
 
 def test_scheduler_skips_youtube_after_daily_budget_is_exhausted(client, monkeypatch):
     monkeypatch.setenv("YOUTUBE_SEARCH_DAILY_BUDGET", "1")
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("PROVIDER_SECRETS_KEY", Fernet.generate_key().decode("ascii"))
     assert client.put(
         "/api/providers",
-        json={"enabled_provider_ids": ["youtube"]},
+        json={
+            "enabled_provider_ids": ["youtube"],
+            "credential_updates": {"youtube": {"api_key": "test-youtube-key"}},
+        },
     ).status_code == 200
     assert client.put(
         "/api/discovery/settings",
