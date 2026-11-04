@@ -9,10 +9,13 @@ import unicodedata
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+from statistics import mean
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -22,7 +25,7 @@ from app.integrations import collect_artist_evidence, search_identity_source
 from app.models import (
     Artist, ArtistCandidate, ArtistDecision, ArtistIdentity, ArtistObservation,
     ArtisticReview, AppAlert, DiscoveryRun, RadarSettings, SourceConfiguration,
-    SourceEvidence, utc_now,
+    SourceDailyUsage, SourceEvidence, utc_now,
 )
 from app.schemas import (
     ArtistCreate, CandidateReview, DecisionCreate, DiscoveryRunRequest,
@@ -34,15 +37,17 @@ from app.scoring import (
 )
 from app.secrets import decrypt_credentials, encrypt_credentials
 from app.source_catalog import (
-    IMPLEMENTED_IDS, source_catalog, source_ids, source_summary,
+    EVIDENCE_IMPLEMENTED_IDS, EXTRA_IMPLEMENTED_IDS, IMPLEMENTED_IDS,
+    LEGACY_PROVIDER_IDS, source_catalog, source_ids, source_summary,
 )
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 APP_VERSION = "3.0.0"
 DEFAULT_SOURCES = ["musicbrainz", "deezer", "wikidata", "wikipedia", "itunes", "bluesky", "gdelt"]
-IDENTITY_SOURCE_IDS = IMPLEMENTED_IDS - {"gdelt", "reddit", "flickr", "openverse"}
-EVIDENCE_SOURCE_IDS = {"gdelt", "reddit", "flickr", "openverse"}
+IDENTITY_SOURCE_IDS = IMPLEMENTED_IDS - EVIDENCE_IMPLEMENTED_IDS
+EVIDENCE_SOURCE_IDS = EVIDENCE_IMPLEMENTED_IDS
+YOUTUBE_QUOTA_ZONE = ZoneInfo("America/Los_Angeles")
 SEEDS = [
     "Kenyan emerging artists", "East African new music", "Bongo Flava",
     "Kenyan hip hop", "Ugandan alternative music", "Rwandan music",
@@ -112,8 +117,6 @@ def _save_settings(db: Session, config: dict) -> dict:
     # Keep the controls bounded. Unknown keys are dropped rather than persisted.
     allowed = set(DEFAULT_SETTINGS)
     merged = {key: value for key, value in merged.items() if key in allowed}
-    if not isinstance(merged.get("discovery_seeds", config.get("discovery_seeds")), list):
-        pass
     row = db.get(RadarSettings, 1)
     if row is None:
         row = RadarSettings(id=1, config=merged)
@@ -122,6 +125,46 @@ def _save_settings(db: Session, config: dict) -> dict:
         row.config = merged
     db.commit()
     return merged
+
+
+def _daily_source_budget(source_id: str) -> int | None:
+    if source_id == "youtube":
+        try:
+            return max(0, int(os.getenv("YOUTUBE_SEARCH_DAILY_BUDGET", "80")))
+        except ValueError:
+            logger.warning("Invalid YOUTUBE_SEARCH_DAILY_BUDGET; using 80")
+            return 80
+    return None
+
+
+def _claim_source_request(db: Session, source_id: str, now: datetime | None = None) -> bool:
+    """Reserve a source request before upstream I/O. Failed requests still count.
+
+    YouTube quota buckets follow Google's midnight-Pacific reset, with DST handled
+    by zoneinfo. Other sources currently have no application-level daily cap.
+    """
+    budget = _daily_source_budget(source_id)
+    if budget is None:
+        return True
+    current = now or _now()
+    quota_date = current.astimezone(YOUTUBE_QUOTA_ZONE).date().isoformat()
+    row = db.scalar(select(SourceDailyUsage).where(
+        SourceDailyUsage.source_id == source_id,
+        SourceDailyUsage.quota_date == quota_date,
+    ).with_for_update())
+    if row is None:
+        row = SourceDailyUsage(source_id=source_id, quota_date=quota_date, request_count=0)
+        db.add(row)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            return False
+    if row.request_count >= budget:
+        return False
+    row.request_count += 1
+    db.commit()
+    return True
 
 
 def _candidate_group(rows: list[ArtistCandidate]) -> list[dict]:
@@ -497,12 +540,25 @@ async def run_discovery(payload: DiscoveryRunRequest, db: Session = Depends(get_
                 key.removeprefix(source_id + "."): value
                 for key, value in credentials.items() if key.startswith(source_id + ".")
             }
+            if not _claim_source_request(db, source_id):
+                raise RuntimeError(
+                    f"{source_id}: daily request budget exhausted; Google quota resets at midnight Pacific Time"
+                )
             results = await search_identity_source(
                 source_id, term, source_credentials, limit=payload.limit,
                 country=payload.country, genre=payload.genre,
             )
             return source_id, term, results
 
+    estimated_requests = len(requested) * len(seeds)
+    max_requests = max(1, int(os.getenv("MAX_PROVIDER_CALLS_PER_SEARCH", "100")))
+    if estimated_requests > max_requests:
+        db.delete(run)
+        db.commit()
+        raise HTTPException(
+            status_code=422,
+            detail=f"Search would start {estimated_requests} upstream requests; maximum is {max_requests}. Reduce selected sources or discovery seeds.",
+        )
     tasks = [query_one(source_id, term) for source_id in requested for term in seeds]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     unique_groups: set[str] = set()
@@ -746,6 +802,4 @@ def mark_alert_read(alert_id: str, db: Session = Depends(get_db)) -> dict:
 @app.exception_handler(SQLAlchemyError)
 async def database_exception_handler(_request, exc: SQLAlchemyError):
     logger.exception("Database operation failed", exc_info=exc)
-    return __import__("fastapi").responses.JSONResponse(
-        status_code=500, content={"detail": "Database operation failed"}
-    )
+    return JSONResponse(status_code=500, content={"detail": "Database operation failed"})
