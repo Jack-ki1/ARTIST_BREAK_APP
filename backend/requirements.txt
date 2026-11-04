@@ -7,3 +7,4 @@ cryptography>=44,<47
 pytest>=8,<9
 httpx>=0.27,<1
 httpx2>=2.0,<3
+tzdata>=2026.6,<2027
